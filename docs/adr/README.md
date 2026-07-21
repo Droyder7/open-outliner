@@ -13,6 +13,8 @@ one, add a new ADR that supersedes it and update the Status line here.
 | [0005](./0005-fractional-indexing-ordering.md) | Fractional indexing for sibling order | Accepted |
 | [0006](./0006-soft-delete-and-tombstone-gc.md) | Soft delete + tombstone-aware GC (no cascade) | Accepted |
 | [0007](./0007-attachments-off-crdt-plane.md) | Attachments on a separate S3 blob plane | Accepted |
+| [0008](./0008-yjs-document-schema.md) | Yjs document schema & order model (LWW rank register) | Accepted |
+| [0009](./0009-move-clock-hlc.md) | Move/rank clock: Hybrid Logical Clock (HLC) | Accepted |
 
 ## Template
 

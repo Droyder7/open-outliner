@@ -11,9 +11,9 @@ concurrent tree moves"; this doc records the decisions.
 | Question | Decision |
 |----------|----------|
 | Conflict model | **CRDT** (Yjs), not OT | → [ADR-0002](./adr/0002-sync-engine-yjs-vs-localfirst.md) |
-| Structure representation | Per-item `parent` + `rank` registers in a `Y.Map`; rich text in `Y.Text` |
-| Concurrent move semantics | **Last-writer-wins on `parent`**, CRDT list order on siblings |
-| Tie-break | `(timestamp, replicaId)` deterministic |
+| Structure representation | Per-item `parentId` + `rank` **LWW registers** in a `Y.Map`; rich text in `Y.Text` | → [ADR-0008](./adr/0008-yjs-document-schema.md), [yjs-schema.md](./yjs-schema.md) |
+| Concurrent move semantics | **Last-writer-wins on `parentId`**; sibling order is an **LWW fractional `rank` register**, read `(rank, id)` | → [ADR-0008](./adr/0008-yjs-document-schema.md) |
+| Tie-break | Hybrid Logical Clock `{ wallMs, counter, replicaId }`, compared in that order | → [ADR-0009](./adr/0009-move-clock-hlc.md) |
 | Cycle handling | Reject/normalize at merge; re-check when projecting |
 | Delete semantics | **Soft delete / tombstone**; GC hard-deletes later | → [ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md) |
 | Where Postgres sits | Downstream **projection**, never a resolver | → [ADR-0004](./adr/0004-crdt-decides-postgres-records.md) |
@@ -33,11 +33,14 @@ Concurrent tree moves are the hard case. Two replicas can move the same item to 
 parents, or move items in ways that would create a cycle (A under B while B moves under A).
 Our decided semantics, per the report's recommended approach:
 
-1. **`parent` is an LWW register per item.** Concurrent moves to different parents converge
-   to one winner deterministically (`timestamp`, then `replicaId`). The loser's move is
-   dropped — not corrupted.
-2. **Sibling order is a CRDT list** over fractional ranks. Order merges without a central
-   authority. → [05-fractional-indexing](./fractional-indexing.md)
+1. **`parentId` is an LWW register per item.** Concurrent moves to different parents converge
+   to one winner deterministically via the **Hybrid Logical Clock** (`wallMs`, then `counter`,
+   then `replicaId`). The loser's move is dropped — not corrupted. → [ADR-0009](./adr/0009-move-clock-hlc.md)
+2. **Sibling order is an LWW fractional `rank` register**, sorted `(rank, id)` at read
+   (ADR-0008). There is **no** `Y.Array` of child order in V1; inserting/moving between two
+   siblings sets only the moved item's `rank`. The known interleaving trade-off is accepted and
+   upgradeable to a list-CRDT in V2 without reshaping the relational model.
+   → [05-fractional-indexing](./fractional-indexing.md)
 3. **Cycles are rejected at merge.** Ancestor checks (closure table / CTE when projecting)
    catch a move that would make the tree non-tree. The move is normalized or dropped, never
    applied to produce a cycle.
@@ -57,7 +60,7 @@ The report contains two framings that look contradictory — "Postgres is a proj
 CRDT state" vs. a schema full of constraints and (optional) triggers. They coexist because
 they live at different layers:
 
-- **The CRDT layer is the only conflict resolver.** All LWW-parent / list-order / cycle
+- **The CRDT layer is the only conflict resolver.** All LWW-parent / LWW-rank / cycle
   resolution happens **before** anything touches Postgres.
 - **Postgres constraints/triggers are integrity guards on an already-resolved write** —
   never a second resolver. If a projected write would violate a constraint, that is a

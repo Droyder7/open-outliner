@@ -18,7 +18,7 @@ designed so V2 doesn't require a reshape. Mirrors report §"Recommended V1 vs V2
 - Yjs doc as client source of truth; `y-indexeddb` local persistence.
 - Hocuspocus realtime + materializer projection to Postgres.
 - Offline editing with Background-Sync mutation queue.
-- LWW-parent + CRDT list order; soft-delete convergence.
+- LWW-parent + LWW fractional-`rank` order (HLC tie-break); soft-delete convergence.
 
 **Features**
 - Infinite nesting, zoom, keyboard/drag reorder + re-parent.

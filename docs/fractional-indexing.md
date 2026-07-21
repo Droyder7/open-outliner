@@ -14,10 +14,13 @@ Lexicographical Index Collisions in Offline Sync".
 - **`(rank, id)` as the total order** — `rank` is *not* unique; ties are legal and broken by `id`.
 - **`COLLATE "C"`** for byte-wise lexicographic ordering (non-negotiable).
 - **`openSpace` when inserting between collided ranks.**
-- **LWW on the `rank` field** when merging concurrent moves.
+- **LWW on the `rank` field** when merging concurrent moves — the "last" writer is decided by
+  the Hybrid Logical Clock shared with `parentId` ([ADR-0009](./adr/0009-move-clock-hlc.md)),
+  not by wall-clock time.
 - **No `UNIQUE(parent_id, rank)` constraint** — uniqueness lives on `item_id`, not position.
 
-→ [ADR-0005](./adr/0005-fractional-indexing-ordering.md)
+→ [ADR-0005](./adr/0005-fractional-indexing-ordering.md) · the Yjs field this column projects
+is pinned in [ADR-0008](./adr/0008-yjs-document-schema.md) / [yjs-schema.md](./yjs-schema.md).
 
 ## Why not the obvious alternatives
 

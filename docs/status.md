@@ -49,14 +49,14 @@ the corresponding subsystem has been implemented.
 | ID | Part | Scope | Stage | Evidence / next step |
 |---|---|---|---|---|
 | `FND` | Repository and engineering foundation | V1 | Ready | Establish the workspace, package manager, TypeScript configuration, quality checks, and developer commands. |
-| `DOM` | Shared domain model and item commands | V1 | Needs decision | Resolve which item metadata belongs to Yjs versus the API in [API and Write Path](./api-and-write-path.md#open-questions-resolve-during-build). |
-| `ORD` | Fractional ordering and move semantics | V1 | Needs decision | Reconcile fractional ranks with the “CRDT list order” language in [Sync and Conflict Resolution](./sync-and-conflict-resolution.md) and [Roadmap](./roadmap.md). |
+| `DOM` | Shared domain model and item commands | V1 | Ready | Metadata ownership resolved by the plane-ownership table in [yjs-schema.md](./yjs-schema.md#plane-ownership). |
+| `ORD` | Fractional ordering and move semantics | V1 | Ready | Resolved: LWW `rank` register + HLC in [ADR-0008](./adr/0008-yjs-document-schema.md) / [ADR-0009](./adr/0009-move-clock-hlc.md); contradicting docs corrected. |
 | `WEB` | PWA shell and outliner interface | V1 | Ready | Implement the React/Vite app shell and core interactions from [Product Overview](./product-overview.md#core-features-v1-scope). |
-| `COL` | Yjs and Hocuspocus collaboration | V1 | Needs decision | Define the exact Yjs document schema, deterministic move clock, cycle normalization, persistence, and compaction behavior. |
+| `COL` | Yjs and Hocuspocus collaboration | V1 | Ready | Yjs schema + move clock pinned in [ADR-0008](./adr/0008-yjs-document-schema.md), [ADR-0009](./adr/0009-move-clock-hlc.md), [yjs-schema.md](./yjs-schema.md). Persistence/compaction remain decide-during-build. |
 | `OFF` | Offline storage, queues, and service worker | V1 | Ready | Implement the local stores and reconnect flows specified in [Offline and PWA](./offline-and-pwa.md). |
-| `API` | API and non-CRDT write path | V1 | Needs decision | Choose REST or RPC and settle metadata ownership and subtree-loading defaults in [API and Write Path](./api-and-write-path.md#open-questions-resolve-during-build). |
-| `MAT` | Yjs-to-PostgreSQL materializer | V1 | Needs decision | Resolve snapshot storage and descendant tombstoning in [Yjs Projection](./yjs-projection.md#open-implementation-questions-to-resolve-during-build). |
-| `DB` | PostgreSQL schema, migrations, and queries | V1 | Needs decision | Move canonical DDL into the decided documentation and remove the split authority described in [Data Model](./data-model.md). |
+| `API` | API and non-CRDT write path | V1 | Needs decision | Metadata ownership resolved ([yjs-schema.md](./yjs-schema.md#plane-ownership)); remaining decision narrowed to REST-vs-RPC + subtree-load defaults in [API and Write Path](./api-and-write-path.md#open-questions-resolve-during-build). |
+| `MAT` | Yjs-to-PostgreSQL materializer | V1 | Ready | Diff target pinned ([yjs-schema.md](./yjs-schema.md) field→column map). Debounce window and snapshot-diff storage remain decide-during-build, not blockers. |
+| `DB` | PostgreSQL schema, migrations, and queries | V1 | Ready | Canonical DDL is now [`/migrations/0001_init_v1.sql`](../migrations/0001_init_v1.sql) (parses + invariants verified); [Data Model](./data-model.md) points at it as the source of truth. |
 | `SEC` | Authentication, authorization, and tenancy | V1 | Needs decision | Decide the authentication mechanism and exact V1 permission granularity in [Security and Multi-Tenancy](./security-and-multitenancy.md#open-questions-resolve-during-build). |
 | `ATT` | Offline attachments and S3/MinIO storage | V1 basic | Needs decision | Reconcile stable attachment-ID references with the documented switch to `s3_key` in [Attachments and Images](./attachments.md#offline-capture--deferred-upload). |
 | `GC` | Tombstones, undo, retention, and hard-delete worker | V1 | Needs decision | Choose eager or lazy descendant tombstoning and define replica acknowledgement and retention rules. |
@@ -74,7 +74,7 @@ must all be **Verified** before V1 is complete.
 
 | Gate | Stage | Evidence / next step |
 |---|---|---|
-| A user can work offline for a day and synchronize cleanly | Needs decision | Define and automate the offline/reconnect soak scenario. |
-| Two users can concurrently edit without corruption or lost structure | Needs decision | Resolve structural merge semantics, then add deterministic convergence tests. |
+| A user can work offline for a day and synchronize cleanly | Ready | Merge semantics resolved ([ADR-0008](./adr/0008-yjs-document-schema.md)/[ADR-0009](./adr/0009-move-clock-hlc.md)); next: define and automate the offline/reconnect soak scenario. |
+| Two users can concurrently edit without corruption or lost structure | Ready | Structural merge semantics resolved (LWW parent+rank via HLC, [ADR-0009](./adr/0009-move-clock-hlc.md)); next: add deterministic convergence tests. |
 | Moving and reordering a 10,000-item outline remains responsive | Ready | Define latency and device/browser thresholds, then add a repeatable benchmark. |
 | The complete system self-hosts with Docker Compose, PostgreSQL, and S3/MinIO | Ready | Implement the stack and add a clean-environment smoke test. |

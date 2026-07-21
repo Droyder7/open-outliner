@@ -5,9 +5,11 @@
 The relational model is the **queryable projection** of the Yjs CRDT (see
 [06-yjs-projection](./yjs-projection.md)). It is rebuildable from CRDT state and never the
 conflict resolver. This doc defines the entities, the hierarchy strategy, and the canonical
-schema. The authoritative SQL lives in the research report under **"Core Schema Design"**
-([`../idea-research-report.md`](../idea-research-report.md), §"Items table"); this doc is
-the decided commentary and MUST stay in sync with it.
+schema. The **authoritative DDL lives in [`/migrations`](../migrations/)** —
+[`0001_init_v1.sql`](../migrations/0001_init_v1.sql) is the V1 schema of record. This doc is
+decided commentary on that schema and MUST stay in sync with it; the
+[`../idea-research-report.md`](../idea-research-report.md) is exploratory history, not
+authority.
 
 ## Entity hierarchy
 
@@ -52,7 +54,8 @@ algorithm, collision handling, and the mandatory `COLLATE "C"` requirement are i
 
 ## Canonical schema (summary)
 
-The full DDL is in the report. Key tables and the decisions baked into them:
+The full DDL is [`/migrations/0001_init_v1.sql`](../migrations/0001_init_v1.sql). Key tables
+and the decisions baked into them:
 
 ### `items` — the core table
 

@@ -19,6 +19,7 @@ Start at the top and go down; each doc assumes the ones above it.
 | 02 | [tech-stack.md](./tech-stack.md) | Chosen frameworks/services and the discarded alternatives |
 | 03 | [data-model.md](./data-model.md) | Entities, the hierarchy model, the canonical SQL schema |
 | 04 | [sync-and-conflict-resolution.md](./sync-and-conflict-resolution.md) | Offline-first sync, CRDT choice, concurrent-move semantics |
+| 04a | [yjs-schema.md](./yjs-schema.md) | The pinned Yjs document schema + field→plane ownership table |
 | 05 | [fractional-indexing.md](./fractional-indexing.md) | Sibling ordering: the decided algorithm and its rules |
 | 06 | [yjs-projection.md](./yjs-projection.md) | How Yjs state becomes queryable Postgres rows |
 | 07 | [offline-and-pwa.md](./offline-and-pwa.md) | Local storage, service worker, mutation queue, attachments offline |
@@ -32,6 +33,10 @@ Start at the top and go down; each doc assumes the ones above it.
 Architecture Decision Records live in [`./adr/`](./adr/) — one file per irreversible-ish
 decision, in the standard Context / Decision / Consequences form. See
 [adr/README.md](./adr/README.md) for the index.
+
+The **authoritative relational schema** is not in these docs — it lives as ordered SQL
+migrations in [`../migrations/`](../migrations/) ([`0001_init_v1.sql`](../migrations/0001_init_v1.sql)
+is the V1 schema of record). `data-model.md` is decided commentary on it.
 
 Current implementation progress is tracked separately in
 [`status.md`](./status.md). It distinguishes accepted design from implemented and verified

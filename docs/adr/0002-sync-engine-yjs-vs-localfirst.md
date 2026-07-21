@@ -22,9 +22,9 @@ local-first-engine family for possible later reassessment.
 - **Harder / newly required:** we design our own persistence, presence/awareness, and
   permissions on top of Yjs; we must build the projection layer (ADR-0004). Yjs adds
   conceptual overhead (CRDT awareness).
-- Tree **moves** — the hard concurrency case — are handled with LWW-parent + CRDT list order
-  (see ADR-0005 and the sync doc) rather than OT transforms, which get genuinely hard for
-  moves.
+- Tree **moves** — the hard concurrency case — are handled with LWW-parent + LWW fractional
+  `rank` (HLC tie-break; see ADR-0005, ADR-0008, ADR-0009 and the sync doc) rather than OT
+  transforms, which get genuinely hard for moves.
 
 ## Alternatives considered
 
