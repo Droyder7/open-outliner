@@ -29,6 +29,7 @@ Start at the top and go down; each doc assumes the ones above it.
 | 11 | [security-and-multitenancy.md](./security-and-multitenancy.md) | Tenancy, permissions, authz boundaries |
 | 12 | [roadmap.md](./roadmap.md) | V1 / V2 split and what is explicitly deferred |
 | 13 | [glossary.md](./glossary.md) | Terms used consistently across all docs |
+| 14 | [self-hosting.md](./self-hosting.md) | Compose topology, backup/restore, health checks, background jobs (`OPS`) |
 
 Architecture Decision Records live in [`./adr/`](./adr/) — one file per irreversible-ish
 decision, in the standard Context / Decision / Consequences form. See

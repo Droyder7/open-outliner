@@ -37,8 +37,8 @@ app doesn't need the network to function:
 - **Mutation outbox** — pending API writes not yet acknowledged by the server.
 - **Attachment blob cache** — captured-offline blobs and lazily-fetched attachment blobs,
   keyed by attachment id. Large files MAY use OPFS instead. → [09-attachments](./attachments.md)
-- **Search index (optional)** — a small client-side inverted index for offline search.
-  → [08-search](./search.md)
+- **Search index (V2, optional)** — a built client-side inverted index. V1 offline search is a
+  naive in-memory filter over loaded items, no persisted index. → [08-search](./search.md)
 
 ## Service worker responsibilities
 
@@ -86,6 +86,15 @@ away. The contract:
 "Every write succeeds locally" holds for the **in-memory Yjs doc**; **durability** is
 best-effort with the honest, surfaced failure states above. Track under `OFF` in
 [status.md](./status.md) — this behavior is required for V1, not deferred.
+
+**Offline access loss is a server-side rejection, not a local promise.** "Every write succeeds
+locally" is about *durability*, not *authority*. A client that edited offline and then lost
+access (removed from the workspace) has its queued Yjs updates and outbox writes **rejected
+server-side on reconnect** — the killable server session is re-resolved at the Hocuspocus
+`onAuthenticate` reconnect check ([ADR-0014](./adr/0014-session-auth-and-revocation.md)), so a
+revoked replay never merges. The local edits stay usable until then and the cache is best-effort
+purged on next failed auth, but the security boundary is the **server rejecting the replay**.
+→ [11-security-and-multitenancy](./security-and-multitenancy.md)
 
 ## Deferred
 

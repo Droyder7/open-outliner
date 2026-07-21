@@ -35,9 +35,15 @@ These are load-bearing; feature decisions defer to them.
 3. **The outline is sacred.** Structural operations (nest, move, reorder, mirror) MUST be
    fast, predictable, and never silently corrupt the tree (no cycles, no lost subtrees).
 4. **Web-first PWA as the primary client.** One codebase installs on desktop and mobile;
-   native shells come later if ever.
+   native shells come later if ever. **V1 scope note:** the V1 editor is
+   **desktop-keyboard-first** (Workflowy-parity, [ADR-0017](./adr/0017-editor-interaction-model.md)).
+   Full **accessibility (WCAG/ARIA/screen-reader)** and a **touch alternative to drag** are an
+   explicit **post-V1** commitment, not a V1 gate — a recorded deferral (see status.md
+   accessibility gate), not a silent gap. The PWA still installs and renders on mobile in V1;
+   what defers is first-class touch editing and the accessibility bar.
 5. **Own your data.** Postgres + S3 you can host; export is a first-class feature, not an
-   afterthought.
+   afterthought. The V1 export contract is **Markdown + full-fidelity JSON round-trip**
+   ([ADR-0016](./adr/0016-export-contract.md)).
 6. **Ship the outliner before the platform.** Boards, tables, and advanced views are V2.
    The V1 bar is "a delightful, reliable, collaborative outliner." → [12-roadmap](./roadmap.md)
 
@@ -77,22 +83,23 @@ workload, network/device profile, threshold, and expected conflict outcome. The 
 versions are tracked in [status.md](./status.md#v1-acceptance-gates); until defined there, these
 are goals, not gates.
 
-## Specification gaps to close before/with V1 build
+## Specification gaps — now resolved
 
-These are named product decisions that must be specified (not just implied) before the
-corresponding subsystem is built. They are tracked with owners/stages in
-[status.md](./status.md); listed here so the product surface is honest about what is undecided:
+These were the named product decisions that had to be specified before their subsystem could be
+built. As of 2026-07-22 all four are **decided** (or explicitly deferred) and tracked with
+stages in [status.md](./status.md):
 
-- **Editor interaction semantics** — Enter, Tab/Shift-Tab, Backspace at boundaries, split/merge,
-  multi-selection, copy/paste (internal + external), collapse/expand, zoom navigation, drag
-  targets and validity, cross-document move, focus restoration, and invalid-operation behavior.
-  Core product semantics, not implementation details. → `WEB`
-- **Collaboration journey** — invitations, member removal, ownership transfer, viewer vs.
-  commenter capabilities, presence payload contents, stale-presence handling, conflict
-  notifications, and sharing/privacy. → `SEC`/`COL`
-- **Export contract** — required format(s), hierarchy + rich-text fidelity, attachment and
-  deleted-content policy, deterministic ordering, versioning, and a round-trip acceptance test.
-  "Own your data" (principle #5) is not real without this. → export gate
-- **Accessibility & mobile** — a WCAG target, semantic tree/ARIA pattern, screen-reader
-  behavior, a touch alternative to drag, mobile-keyboard and focus model, and the supported
-  device/browser matrix. → `WEB`
+- **Editor interaction semantics** — **decided: Workflowy-parity**
+  ([ADR-0017](./adr/0017-editor-interaction-model.md)) — Enter/Tab/Shift-Tab, Backspace
+  split/merge, multi-select, copy/paste (internal + Markdown external), collapse/expand, zoom,
+  drag targets/validity, cross-document move (cut-and-reinsert), and invalid-op behavior. → `WEB`
+- **Collaboration journey** — **decided: owner + equal workspace members** with server-side
+  sessions and an authoritative revocation path
+  ([ADR-0014](./adr/0014-session-auth-and-revocation.md)); invitation, member removal, and
+  ownership are first-class operations. → `SEC`/`COL`
+- **Export contract** — **decided: Markdown + JSON round-trip**
+  ([ADR-0016](./adr/0016-export-contract.md)) — deterministic `(rank, id)` order, tombstones
+  excluded, attachments referenced, with a round-trip acceptance test defining the gate. → export gate
+- **Accessibility & mobile** — **explicitly deferred to post-V1** (see principle #4 scope note).
+  V1 is desktop-keyboard-first; a WCAG target, ARIA tree pattern, screen-reader behavior, and a
+  touch alternative to drag are a recorded post-V1 commitment, not a V1 gate. → `WEB` accessibility gate (Deferred)

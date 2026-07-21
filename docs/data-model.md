@@ -67,7 +67,11 @@ The load-bearing decisions in this table:
   cascade would physically erase a subtree without writing tombstones and break offline
   convergence. All user deletes are soft. → [ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md)
 - **`rank TEXT` with `COLLATE "C"`** — fractional index; byte-wise ordering is required.
-- **`deleted_at TIMESTAMPTZ`** — soft-delete tombstone for sync/undo.
+- **`deleted_at TIMESTAMPTZ`** — soft-delete tombstone for sync/undo, projected from the CRDT
+  `deleted` register ([ADR-0011](./adr/0011-crdt-tombstone.md)). Delete is **lazy**: only the
+  **subtree root** carries the tombstone; reads treat any item under a deleted ancestor as
+  implicitly deleted (filter on `deleted_at IS NULL` *and* no deleted ancestor). Hard-delete
+  removes descendants bottom-up in GC. → [ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md)
 - **`version BIGINT`** — optimistic concurrency for the API/projection path.
 - **One live root per document** enforced by:
   ```sql

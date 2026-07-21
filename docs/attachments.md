@@ -37,6 +37,13 @@ CREATE TABLE attachments (
 
 Items reference attachments **by id**. The blob itself never enters the Yjs doc.
 
+> **Canonical DDL:** the illustrative table above predates the integrity migration. The
+> authoritative `attachments` definition — created with a **composite same-document FK
+> `(item_id, document_id) → items(id, document_id) ON DELETE RESTRICT`** (not `SET NULL`) so a
+> live attachment can't be orphaned or point cross-document — is
+> [`/migrations/0002_integrity_v1.sql`](../migrations/0002_integrity_v1.sql). See
+> [data-model.md](./data-model.md) for the invariants.
+
 ## Offline capture → deferred upload
 
 1. **Capture offline.** User adds an image/file with no network → store the blob in
@@ -78,12 +85,19 @@ record:
 - **Presigned URLs** keep S3 credentials off the client for both PUT and GET. Only the server
   flips `uploaded_at` (marking the row finalized) after these checks pass.
 
-## Deletion
+## Deletion & presign policy (decided)
 
-Attachment rows soft-delete alongside their item. The **S3 object is removed by the same
-tombstone-aware GC** after the retention window — so an offline client that re-adds a
-reference *during* the window doesn't hit a missing object.
-→ [ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md)
+- **Presign TTLs are short.** PUT presigns ~5 min, GET presigns ~15 min — long enough for an
+  upload/download, short enough that a presign minted just before a member is revoked expires on
+  its own rather than granting lasting access ([ADR-0014](./adr/0014-session-auth-and-revocation.md)).
+  Presign **issuance checks live membership**, so a revoked user cannot mint new URLs.
+- **Deferred S3 GC.** Attachment rows soft-delete alongside their item. On item hard-delete, the
+  tombstone-aware GC **detaches / soft-deletes the attachment rows first, then removes the S3
+  object after the retention window** — so an offline client that re-adds a reference *during*
+  the window doesn't hit a missing object, and the `attachments` RESTRICT FK (migration
+  `0002_integrity_v1.sql`) structurally prevents deleting an item out from under a live
+  attachment row. Immediate S3 deletion is explicitly **not** done: it would race offline undo
+  (a resurrected item losing its blob). → [ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md)
 
 ## Why a separate plane
 

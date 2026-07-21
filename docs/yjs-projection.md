@@ -137,25 +137,31 @@ true in the presence of RESTRICT FKs.
   shared across workers), not an in-memory per-worker snapshot.
 - **Debounce window** (~200–500ms) stays a tuning knob — with the revision guard it is no
   longer a correctness risk, only a latency/batching trade-off.
-- **Descendant tombstoning** (eager mark-all vs. lazy mark-root-and-filter) is owned by the
-  `GC` decision (ADR-0006 / ADR-0011); the projection supports either.
+- **Descendant tombstoning** is **lazy** (decided, ADR-0006/ADR-0011): delete sets the
+  `deleted` register on the **subtree root only**; the projector and reads treat any item with a
+  deleted ancestor as implicitly deleted (filter under a deleted ancestor), rather than writing
+  a tombstone on every descendant. Cheap delete + cheap undo (flip one register).
 
-## Open decisions — Yjs persistence boundary (`COL`, decide-during-build)
+## Yjs persistence boundary — decided ([ADR-0015](./adr/0015-yjs-persistence-boundary.md))
 
-These are **flagged, not yet decided**; they gate the Hocuspocus persistence layer, not the
-projection logic above. Track under `SEC`/`COL`/`OPS` in [status.md](./status.md):
+These gate the Hocuspocus persistence layer (not the projection logic above). All four are now
+pinned in [ADR-0015](./adr/0015-yjs-persistence-boundary.md):
 
 - **Acknowledge-after-persist.** The server MUST NOT ack a Yjs update to the client until it is
-  durably written to `yjs_updates` (fsync/commit), or a crash can lose an acked update — the
-  one thing the "back up the CRDT hardest" posture cannot tolerate. Decide the ack ordering
-  explicitly.
-- **Update ordering & dedup.** Whether `yjs_updates` rows are deduplicated / ordering-checked,
-  or the store tolerates replays (Yjs merge is idempotent, but unbounded duplicate updates bloat
-  load time).
-- **Snapshots & compaction.** A compaction strategy (periodic `Y.encodeStateAsUpdate` snapshot +
-  truncate superseded incremental updates) so room load stays bounded as history grows.
-- **Corruption detection & replay.** How a corrupt/partial update is detected and the room is
-  rebuilt from the last good snapshot.
-
-Until these are decided, `COL` durability cannot be marked beyond **Needs decision** for the
-persistence boundary even though the projection side is specified.
+  durably committed to `yjs_updates` (fsync/commit). A crash in the receive→persist gap loses
+  only *un-acked* updates, which the client still holds locally and re-sends — **no acked update
+  is ever lost**. The trade is a small per-batch commit latency before ack; acceptable because
+  the client already applies edits locally and instantly (the ack is a durability signal, not a
+  render gate).
+- **Replay-tolerant store, no strict dedup.** Yjs merge is idempotent/commutative, so the store
+  does not need per-update dedup or ordering checks for correctness. Duplicates cost only load
+  time and storage — addressed by compaction, not a hot-path uniqueness index.
+- **Snapshots & compaction.** Periodically (by update count/age) write a
+  `Y.encodeStateAsUpdate` snapshot and truncate the superseded incremental updates in the same
+  transaction, under the per-document advisory lock. Room load stays bounded by the compaction
+  interval, not total history. Compaction only replaces already-acked updates, so it never
+  conflicts with the durable-ack rule.
+- **Corruption detection → rebuild from last good snapshot.** Stored rows carry an integrity
+  check; a row that fails to decode/apply is treated as corrupt (not fatal) and the room is
+  rebuilt from the last good snapshot plus the still-valid incrementals — the CRDT-plane
+  analogue of the projection catch-up sweep (ADR-0013).

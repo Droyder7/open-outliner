@@ -19,6 +19,10 @@ one, add a new ADR that supersedes it and update the Status line here.
 | [0011](./0011-crdt-tombstone.md) | Delete is a CRDT register, not a missing key | Accepted |
 | [0012](./0012-convergent-cycle-resolution.md) | Convergent cycle resolution | Accepted |
 | [0013](./0013-projection-revision-guard.md) | Projection revision guard & catch-up reconciliation | Accepted |
+| [0014](./0014-session-auth-and-revocation.md) | Session auth, workspace membership & revocation | Accepted |
+| [0015](./0015-yjs-persistence-boundary.md) | Yjs persistence boundary: ack-after-persist, snapshots, compaction | Accepted |
+| [0016](./0016-export-contract.md) | Export contract: Markdown + JSON round-trip | Accepted |
+| [0017](./0017-editor-interaction-model.md) | Editor interaction model: Workflowy-parity | Accepted |
 
 ## Template
 

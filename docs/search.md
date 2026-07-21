@@ -13,7 +13,7 @@ reshaping later. This mirrors the report §"Full-Text Search".
 | Column | `search_tsv` on `items`, `GENERATED ALWAYS AS ... STORED` from `content_text` |
 | Dictionary | Start with **`simple`** (no stemming) for predictable outline search |
 | Scope | Always **tenant/document-scoped first**, then rank |
-| Offline search | **Client-side** local index over cached items |
+| Offline search | **V1: naive in-memory filter** over loaded items; built client index is V2 |
 
 ## Server-side (Postgres)
 
@@ -43,12 +43,15 @@ CREATE INDEX items_search_idx ON items USING GIN (search_tsv)
 
 The client already holds the working set in IndexedDB, so **offline search is local**:
 
-- Build a small inverted index (e.g. `flexsearch` / `lunr`) over cached items.
-- Handles the common case (search what you're working on) with zero network.
-- The server `tsvector` handles **cross-document / not-yet-loaded** results when online.
+- **V1 (decided): a naive in-memory substring/filter** over the already-loaded items. No built
+  index to maintain — trivial to ship and correct for "search what you're working on." It only
+  covers the loaded set and degrades on very large outlines; that is an accepted V1 limit.
+- **V2:** a small built inverted index (e.g. `flexsearch` / `lunr`) over cached items for
+  faster, ranked offline search across the full cached set.
+- The server `tsvector` (V2) handles **cross-document / not-yet-loaded** results when online.
 
-The two are complementary: local for the loaded set and offline mode, server for the long
-tail and global search.
+The tiers are complementary: naive local filter for the loaded set and offline mode in V1, a
+built local index and server FTS as V2 scale-ups.
 
 ## Explicitly not doing (V1/V2)
 

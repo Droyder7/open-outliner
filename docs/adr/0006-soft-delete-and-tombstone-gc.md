@@ -20,10 +20,14 @@ item being moved *into* a subtree that is being physically deleted).
 The delete path:
 
 1. **User delete** → set the item's CRDT `deleted` register (`isDeleted:true` + fresh HLC,
-   [ADR-0011](./0011-crdt-tombstone.md)) on the subtree root; mark descendants via closure/CTE
-   or treat them as implicitly deleted at read time. The register is the tombstone peers
-   converge on; the materializer projects it to `items.deleted_at`. (The authoritative delete
-   fact lives in the CRDT plane — `deleted_at` is its projection, not the source of truth.)
+   [ADR-0011](./0011-crdt-tombstone.md)) on the **subtree root only** (**lazy** descendant
+   tombstoning, decided 2026-07-22): descendants are treated as implicitly deleted at read time
+   (the projector and reads filter any item under a deleted ancestor), rather than writing a
+   tombstone on every descendant. The register is the tombstone peers converge on; the
+   materializer projects it to `items.deleted_at`. (The authoritative delete fact lives in the
+   CRDT plane — `deleted_at` is its projection, not the source of truth.) Lazy delete keeps
+   delete and undo O(1) in CRDT writes (flip one register) at the cost of an ancestor check on
+   read; hard-delete still walks the subtree bottom-up in GC.
 2. **GC (background, tombstone-aware)** → after a retention window long enough that all known
    replicas have synced past the tombstone, hard-delete **bottom-up** (leaves first) under a
    document advisory lock, removing both the `items` row and the item's Yjs key. Only GC issues
@@ -40,7 +44,8 @@ The delete path:
   gone row); the retention window MUST be a **replica-acknowledgement** bound, not a bare wall
   clock — GC may hard-delete only once all known replicas have synced past the tombstone (the
   acknowledgement/heartbeat mechanism is a decide-during-build item under `GC`/`OPS`);
-  descendant tombstoning strategy (eager mark vs lazy read-time filter) must be chosen.
+  descendant tombstoning is **lazy** (mark subtree root, filter descendants at read — decided
+  2026-07-22, see the delete path above).
 - Consistent with ADR-0004: the DB takes **no autonomous structural action**; deletes are
   tombstones the projector writes, physical removal is a separate, deliberate job.
 - **`item_refs` is the deliberate exception:** its FK is `ON DELETE CASCADE` because a ref is

@@ -80,8 +80,20 @@ When a concurrent move loses the LWW, or a mirror is created instead of a move, 
 SHOULD surface it — activity history or a small conflict note — so the result never feels
 arbitrary. → [04-sync](./sync-and-conflict-resolution.md)
 
+## API shape — single `/rpc` endpoint (decided)
+
+The non-CRDT API is a **single `POST /rpc` endpoint** dispatching typed commands (queries, auth,
+attachment presign, workspace/settings). Structure and text ride the Yjs plane, so this API
+mostly wraps reads, auth, and presign — a single typed dispatch is lighter to extend than a
+spread of resource routes for what is largely a command surface. Decided resolutions:
+
+- **Transport:** one `/rpc` endpoint with typed commands (not REST resource routes).
+- **`UpdateItem` plane:** pure content/metadata `UpdateItem` may ride the API/projection with
+  `version` optimistic concurrency; all *structural* fields stay CRDT-only.
+- **Subtree-load default:** **load-on-expand** — reads return a bounded depth and children load
+  as the user expands, rather than shipping an entire large outline in one response.
+
 ## Open questions (resolve during build)
 
-- Exact REST vs RPC shape (single `/rpc` endpoint vs. resource routes).
-- Whether `UpdateItem` metadata rides the Yjs plane too, or stays API-only.
-- Pagination/depth-limit defaults for subtree loads (report recommends load-on-expand).
+- Exact `/rpc` command schema and error envelope (validation, typed error codes).
+- Depth/pagination limits (the exact default depth and page size for load-on-expand).
