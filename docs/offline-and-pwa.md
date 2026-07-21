@@ -59,6 +59,34 @@ immediate and durable across reloads. On reconnect:
   URLs to `s3_key`.
 - No corruption, no lost structure, no manual merge.
 
+## When local storage fails (required behavior)
+
+Product principle #1 says "every write MUST succeed locally," but browser storage can and does
+fail — that promise is only implementable if failure has defined behavior, not if it is assumed
+away. The contract:
+
+- **Quota exhaustion / eviction.** Writes to `y-indexeddb` or the outbox that fail with a quota
+  error MUST surface a non-destructive "storage full — free space or some offline edits may not
+  persist" state, never a silent drop. The in-memory Yjs doc keeps working; the risk is durability
+  across reload, and the user must be told.
+- **Private browsing / IndexedDB unavailable.** Detect at startup; fall back to in-memory-only
+  operation with an explicit "changes won't survive a reload" banner rather than pretending
+  persistence exists.
+- **Failed IndexedDB transaction.** Retry with backoff; if it keeps failing, treat as the
+  quota/unavailable case above — surface, don't swallow.
+- **Local corruption.** A `y-indexeddb` store that fails to load is rebuilt from the server on
+  next connect; if offline, start a fresh in-memory doc and warn that unsynced local edits may
+  be unrecoverable. Never hard-crash the app on a corrupt store.
+- **Background Sync absent** (Safari/Firefox): fall back to a foreground reconnect flush on
+  `online` / visibility events — Background Sync is an optimization, not a requirement.
+- **Service-worker upgrade.** A new SW version MUST NOT drop a non-empty mutation outbox or the
+  Yjs store; migrate or preserve across `activate`, and never `skipWaiting` in a way that
+  discards pending writes.
+
+"Every write succeeds locally" holds for the **in-memory Yjs doc**; **durability** is
+best-effort with the honest, surfaced failure states above. Track under `OFF` in
+[status.md](./status.md) — this behavior is required for V1, not deferred.
+
 ## Deferred
 
 - Native shells (Capacitor/Expo) — only if PWA platform limits (push, file handling) bite.

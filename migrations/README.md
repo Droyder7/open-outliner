@@ -10,6 +10,7 @@ exploratory history, **not** authority.
 | File | What it does |
 |------|--------------|
 | `0001_init_v1.sql` | V1 baseline: tenancy, `items` (adjacency + fractional rank), tags, membership, change log, `yjs_updates`. |
+| `0002_integrity_v1.sql` | V1 integrity hardening: same-document parent FK, `attachments` table with same-document item FK, and `document_projection` (monotonic projection revisions + catch-up). |
 
 ## Conventions
 
@@ -30,6 +31,12 @@ exploratory history, **not** authority.
   `rank TEXT COLLATE "C"`, not unique; total order is `(rank, id)`.
 - **One live root per document**: a partial unique index (`items_one_root_per_doc_idx`), not a
   CHECK.
+- **Same-document parenting** (added in `0002`, [ADR-0010](../docs/adr/0010-atomic-move-register.md)
+  context): `items.parent_id` references the composite `(id, document_id)`, so a child and its
+  parent MUST share a document — cross-document parenting is structurally impossible.
+- **Monotonic projection** (`0002`, [ADR-0013](../docs/adr/0013-projection-revision-guard.md)):
+  `document_projection` holds per-document `source_rev` / `projected_rev`; the materializer only
+  advances the projection forward, and a catch-up sweep recovers projections lost to a crash.
 - The Yjs-field → column mapping is pinned in [`docs/yjs-schema.md`](../docs/yjs-schema.md).
 
 ## Deferred to later migrations (V2 — intentionally NOT in `0001`)

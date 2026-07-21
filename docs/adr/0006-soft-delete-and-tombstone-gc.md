@@ -19,21 +19,28 @@ item being moved *into* a subtree that is being physically deleted).
 
 The delete path:
 
-1. **User delete** → set `deleted_at` on the subtree root (mark descendants via closure/CTE,
-   or treat them as implicitly deleted at read time). Emit a tombstone so peers converge.
+1. **User delete** → set the item's CRDT `deleted` register (`isDeleted:true` + fresh HLC,
+   [ADR-0011](./0011-crdt-tombstone.md)) on the subtree root; mark descendants via closure/CTE
+   or treat them as implicitly deleted at read time. The register is the tombstone peers
+   converge on; the materializer projects it to `items.deleted_at`. (The authoritative delete
+   fact lives in the CRDT plane — `deleted_at` is its projection, not the source of truth.)
 2. **GC (background, tombstone-aware)** → after a retention window long enough that all known
    replicas have synced past the tombstone, hard-delete **bottom-up** (leaves first) under a
-   document advisory lock. Only GC issues physical `DELETE`.
+   document advisory lock, removing both the `items` row and the item's Yjs key. Only GC issues
+   physical `DELETE`.
 
 ## Consequences
 
-- **Easier / correct:** offline replicas converge instead of resurrecting rows; undo is
-  trivial (clear `deleted_at`); the cascade-vs-move-in race cannot occur because the DB never
-  cascades.
+- **Easier / correct:** offline replicas converge instead of resurrecting rows because the
+  tombstone is an explicit CRDT `deleted` register with its own HLC, not a missing key
+  ([ADR-0011](./0011-crdt-tombstone.md)); undo is deterministic (set `isDeleted:false` with a
+  strictly-greater HLC); the cascade-vs-move-in race cannot occur because the DB never cascades.
 - **Newly required:** a GC worker with a correct retention window (a **correctness** property,
   not just cleanup — too short and an offline replica re-adds a reference to a physically
-  gone row); descendant tombstoning strategy (eager mark vs lazy read-time filter) must be
-  chosen.
+  gone row); the retention window MUST be a **replica-acknowledgement** bound, not a bare wall
+  clock — GC may hard-delete only once all known replicas have synced past the tombstone (the
+  acknowledgement/heartbeat mechanism is a decide-during-build item under `GC`/`OPS`);
+  descendant tombstoning strategy (eager mark vs lazy read-time filter) must be chosen.
 - Consistent with ADR-0004: the DB takes **no autonomous structural action**; deletes are
   tombstones the projector writes, physical removal is a separate, deliberate job.
 - **`item_refs` is the deliberate exception:** its FK is `ON DELETE CASCADE` because a ref is

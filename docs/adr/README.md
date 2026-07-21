@@ -15,6 +15,10 @@ one, add a new ADR that supersedes it and update the Status line here.
 | [0007](./0007-attachments-off-crdt-plane.md) | Attachments on a separate S3 blob plane | Accepted |
 | [0008](./0008-yjs-document-schema.md) | Yjs document schema & order model (LWW rank register) | Accepted |
 | [0009](./0009-move-clock-hlc.md) | Move/rank clock: Hybrid Logical Clock (HLC) | Accepted |
+| [0010](./0010-atomic-move-register.md) | The move is one atomic register (no torn moves) | Accepted |
+| [0011](./0011-crdt-tombstone.md) | Delete is a CRDT register, not a missing key | Accepted |
+| [0012](./0012-convergent-cycle-resolution.md) | Convergent cycle resolution | Accepted |
+| [0013](./0013-projection-revision-guard.md) | Projection revision guard & catch-up reconciliation | Accepted |
 
 ## Template
 

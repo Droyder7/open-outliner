@@ -38,8 +38,11 @@ Client edits ──► Yjs doc (authoritative structure + text)
 
 ## CRDT document shape
 
-- **Structure** lives in a `Y.Map<itemId, { parentId, rank, type, ... }>`. This is where
-  LWW-parent and list-order merges resolve. → [04-sync](./sync-and-conflict-resolution.md)
+- **Structure** lives in a `Y.Map<itemId, itemNode>`. Each item's `parentId` and `rank` are
+  carried inside one **atomic `move` register** (ADR-0010) gated by an HLC (ADR-0009), so the
+  projector reads a whole winning move, never a torn `{parentId, rank}` pair. Delete is an
+  explicit `deleted` register (ADR-0011), not a missing key.
+  → [yjs-schema.md](./yjs-schema.md), [04-sync](./sync-and-conflict-resolution.md)
 - **Rich content** lives in a `Y.Text` (or fragment) per item, bound to TipTap.
 - The Yjs doc — **not Postgres** — owns all of this. Postgres never sees an unresolved state.
 
@@ -52,39 +55,107 @@ Client edits ──► Yjs doc (authoritative structure + text)
    the materializer:
    - reads the current `Y.Map` of items,
    - diffs it against the last-projected snapshot for that document,
-   - emits `INSERT ... ON CONFLICT (id) DO UPDATE` for changed items,
-   - sets `deleted_at` for keys that disappeared,
+   - emits `INSERT ... ON CONFLICT (id) DO UPDATE` for changed items, reading each item's
+     `move` register as a unit so `parent_id` and `rank` always come from the *same* winning
+     move (ADR-0010),
+   - projects each item's `deleted` register (ADR-0011) to `deleted_at` — a set
+     `isDeleted:true` writes the server timestamp, an undo (`isDeleted:false`) clears it.
+     **Deletion is never inferred from a missing key** — a tombstone is explicit CRDT data,
+     which is what lets an offline delete converge instead of resurrecting,
    - extracts plain text from each item's `Y.Text` into `content_text` (feeds search).
    Debounce (~200–500ms) so a burst of keystrokes produces **one** projection pass.
-3. **Serialize per document.** Take an advisory lock on `hashtext(document_id)` so two
-   Hocuspocus workers can't interleave upserts for the same document.
-4. **Idempotent and rebuildable.** Same CRDT state → same rows. A full rebuild (drop rows,
-   re-project from Yjs) repairs a divergent projector and powers migrations.
+3. **Serialize per document, and apply monotonically.** Take an advisory lock on
+   `hashtext(document_id)` so two Hocuspocus workers can't interleave upserts for the same
+   document. Under that lock, apply a pass **only if it advances** the document's
+   `projected_rev` past `source_rev` (ADR-0013) — a delayed older callback that arrives after a
+   newer one sees `source_rev <= projected_rev` and **no-ops** instead of overwriting with
+   stale state. The revision advance commits in the **same transaction** as the row upserts.
+4. **Idempotent, rebuildable, and self-healing.** Same CRDT state → same rows. A startup +
+   interval **catch-up sweep** re-projects any document where `projected_rev < source_rev`,
+   recovering a projection lost to a crash between `yjs_updates` persistence and the debounced
+   callback (ADR-0013). A full rebuild (drop rows, re-project from Yjs) repairs a divergent
+   projector and powers migrations — see the FK-safe procedure below.
 
 ## Hard rules
 
 - **Never edit `items` to change structure.** Such a write is silently overwritten on the
   next projection pass. Structure changes go through the CRDT only. → [10-api](./api-and-write-path.md)
 - **The projector never resolves conflicts.** By the time it runs, the CRDT has already
-  merged. If a projected write hits a constraint (one-root, RESTRICT), that's a **projector
-  bug**, not a conflict — fix the projector, don't loosen the constraint.
+  merged. If a projected write hits a constraint (one-root, RESTRICT, same-document parent),
+  that means the resolving CRDT write has **not merged on this node yet** — it resolves on the
+  next update. A **cycle** is not rejected: the CRDT layer repairs it deterministically
+  (break the youngest edge, reparent the freed item to root, emit an ordinary `move`), and the
+  projector's ancestor check only detects and, if the server is a participating replica, emits
+  that repair — it never vetoes into a non-terminating loop (ADR-0012).
 - **No DB-side structural mutation.** No cascades; deletes are tombstones the projector
   writes, and physical deletion is a separate GC job. → [ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md)
 
 ## Durability & recovery
 
+**"Disposable cache" applies only to the item projection — not to every table.** Be precise
+about what is rebuildable from Yjs and what is authoritative relational data:
+
 | Artifact | Role | If lost |
 |----------|------|---------|
-| `yjs_updates` (raw CRDT) | Source of truth | **Catastrophic** — this is the real data. Back it up. |
-| `items` + projection tables | Query cache | Rebuildable from `yjs_updates`; just re-project. |
+| `yjs_updates` (raw CRDT) | Source of truth for structure + text | **Catastrophic** — this is the real outline data. Back it up hardest. |
+| `items` + `content_text` / `search_tsv` | Query cache derived from Yjs | Rebuildable from `yjs_updates`; just re-project (see below). |
+| `document_projection` (revisions) | Projection bookkeeping | Rebuildable — reset `projected_rev = 0` and let the sweep re-project. |
+| `workspaces`, `documents`, `document_members` | **Authoritative** tenancy/membership | **Not in Yjs, not rebuildable.** Back up with `yjs_updates`. Losing these orphans every doc. |
+| `attachments` metadata + S3 objects | **Authoritative** blob plane | **Not in Yjs.** Coordinate backup with `yjs_updates`; an item's `move`/text survives a Yjs restore but its blobs do not. |
 
-This asymmetry is the point: back up the CRDT plane hardest; treat the projection as a
-cache you can regenerate.
+The asymmetry is real but **two-sided**: the item projection is a cache you regenerate; the
+tenancy, membership, and blob planes are primary data that a Yjs-only restore would **not**
+bring back. A coherent restore reconstitutes all authoritative planes together — see
+[architecture-overview.md](./architecture-overview.md) recovery and
+[security-and-multitenancy.md](./security-and-multitenancy.md).
 
-## Open implementation questions (to resolve during build)
+## FK-safe rebuild procedure
 
-- Exact debounce window and whether to also project on an interval as a safety net.
-- Whether descendant tombstoning is done eagerly (mark all) or lazily (mark root, filter at
-  read). → [04-sync](./sync-and-conflict-resolution.md)
-- Snapshot strategy for the "last projected state" diff base (in-memory per worker vs. a
-  stored snapshot).
+"Drop `items` and re-project" is the mental model, but a literal `TRUNCATE items` fails: other
+rows reference it (`documents.root_item_id RESTRICT`, `attachments.item_id RESTRICT`,
+`item_tags ... CASCADE`, and `items.parent_id` self-reference). Rebuild **per document** so
+FKs stay satisfied:
+
+1. Take the per-document advisory lock and set `projected_rev = 0` for the document.
+2. Re-derive the full item set from current Yjs state into the existing rows via **upsert**
+   (`INSERT ... ON CONFLICT (id) DO UPDATE`), not drop-then-insert — this repairs divergent
+   rows in place without violating the inbound FKs.
+3. For item ids present in `items` but absent from Yjs (and past their tombstone), let the
+   **GC path** remove them bottom-up under the same lock (ADR-0006) — the rebuild itself never
+   issues a raw `DELETE` that could strand `documents.root_item_id` or an `attachments` row.
+4. Advance `projected_rev` to the current `source_rev` in the same transaction.
+
+Rebuilding by upsert-and-GC (never truncate) is what keeps the "disposable projection" claim
+true in the presence of RESTRICT FKs.
+
+## Resolved mechanics (were open questions)
+
+- **Interval safety net — required, not optional.** The catch-up sweep runs at startup and on
+  an interval (ADR-0013); it is the only thing that recovers a projection lost to a crash in
+  the persist→debounce gap.
+- **Snapshot / diff base** is keyed by `projected_rev` in `document_projection` (durable,
+  shared across workers), not an in-memory per-worker snapshot.
+- **Debounce window** (~200–500ms) stays a tuning knob — with the revision guard it is no
+  longer a correctness risk, only a latency/batching trade-off.
+- **Descendant tombstoning** (eager mark-all vs. lazy mark-root-and-filter) is owned by the
+  `GC` decision (ADR-0006 / ADR-0011); the projection supports either.
+
+## Open decisions — Yjs persistence boundary (`COL`, decide-during-build)
+
+These are **flagged, not yet decided**; they gate the Hocuspocus persistence layer, not the
+projection logic above. Track under `SEC`/`COL`/`OPS` in [status.md](./status.md):
+
+- **Acknowledge-after-persist.** The server MUST NOT ack a Yjs update to the client until it is
+  durably written to `yjs_updates` (fsync/commit), or a crash can lose an acked update — the
+  one thing the "back up the CRDT hardest" posture cannot tolerate. Decide the ack ordering
+  explicitly.
+- **Update ordering & dedup.** Whether `yjs_updates` rows are deduplicated / ordering-checked,
+  or the store tolerates replays (Yjs merge is idempotent, but unbounded duplicate updates bloat
+  load time).
+- **Snapshots & compaction.** A compaction strategy (periodic `Y.encodeStateAsUpdate` snapshot +
+  truncate superseded incremental updates) so room load stays bounded as history grows.
+- **Corruption detection & replay.** How a corrupt/partial update is detected and the room is
+  rebuilt from the last good snapshot.
+
+Until these are decided, `COL` durability cannot be marked beyond **Needs decision** for the
+persistence boundary even though the projection side is specified.

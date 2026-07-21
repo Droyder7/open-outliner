@@ -45,9 +45,12 @@ Items reference attachments **by id**. The blob itself never enters the Yjs doc.
    blob URL.
 2. **Queue the upload.** Add to a persistent **outbox** of pending uploads.
 3. **On reconnect** (Background Sync): upload each blob to S3 via **presigned PUT**, then
-   write the `attachments` row (`s3_key`, `uploaded_at`) and **flip the item's reference**
-   from the local blob URL to the `s3_key`. The client id is the durable key, so retries are
-   idempotent. → [07-offline-and-pwa](./offline-and-pwa.md)
+   write the `attachments` row (`s3_key`, `uploaded_at`). The item's reference is the
+   **client-generated attachment id and never changes** — the item points at the attachment
+   *row*, not at a storage key. What changes is where that row's blob is *resolved from*: the
+   client's local-blob-URL cache entry for that id is superseded by the row's `s3_key`. So the
+   item reference is stable; only the attachment's own `s3_key` transitions from null → set.
+   The client id is the durable key, so retries are idempotent. → [07-offline-and-pwa](./offline-and-pwa.md)
 
 ## Download on demand
 
@@ -58,9 +61,22 @@ When a peer receives an item referencing an attachment it doesn't have locally:
 
 ## Integrity, dedup, security
 
-- **Content-hash (`checksum`)** every blob: dedup identical uploads, detect corruption.
-- **Presigned URLs** keep S3 credentials off the client for both PUT and GET.
-- Enforce **max size / allowed MIME** at the presign step (server decides what it will sign).
+Upload finalization is **server-verified, not client-asserted.** The client proposes
+`mime`/`size`/`checksum` at presign time, but the server MUST NOT trust them as the row of
+record:
+
+- **Content-hash (`checksum`)** every blob to dedup identical uploads and detect corruption.
+  The **server computes the checksum from the stored S3 object** (or requires S3 to, e.g. via
+  `x-amz-checksum-*`) on finalize and rejects a mismatch against what the client claimed. The
+  persisted `attachments.checksum` is the server-computed value.
+- **Size and MIME** are **verified server-side** against the actual stored object on finalize,
+  not taken from the client. The presign step enforces a max size and an allowed-MIME list
+  (`content-length-range` / `Content-Type` conditions in the presigned POST policy) so the
+  client physically cannot store an object outside those bounds.
+- **`s3_key` is server-assigned**, derived from `document_id` + attachment id — the client does
+  not choose the storage key, so it cannot overwrite another tenant's object or collide.
+- **Presigned URLs** keep S3 credentials off the client for both PUT and GET. Only the server
+  flips `uploaded_at` (marking the row finalized) after these checks pass.
 
 ## Deletion
 

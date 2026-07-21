@@ -25,10 +25,10 @@ The service-level commands (not raw SQL from the client):
 
 | Command | Effect |
 |---------|--------|
-| `InsertItem(parent, afterRank, content)` | New item; rank between neighbors; (closure rows in V2) |
+| `InsertItem(parent, afterRank, content)` | New item; sets its `move` register (parent + rank + HLC) in one transaction; (closure rows in V2) |
 | `UpdateItem(id, fields, version)` | Content/metadata only (optimistic concurrency via `version`) |
-| `MoveItem(id, newParent, newRank)` | Relink + cycle check + (closure/`path` fix in V2) |
-| `DeleteItem(id)` | **Soft**-delete subtree (flag root, or all via closure) |
+| `MoveItem(id, newParent, newRank)` | Replace the item's atomic `move` register (parent + rank + fresh HLC) in one transaction; deterministic cycle repair on merge (ADR-0010/0012) |
+| `DeleteItem(id)` | **Soft**-delete: set the subtree root's CRDT `deleted` register (ADR-0011); projects to `deleted_at` |
 | `MirrorItem(target, parent, rank)` | `item_refs` row (V2) |
 
 Structural commands (`InsertItem`, `MoveItem`, `DeleteItem`, `MirrorItem`) are realized as
@@ -41,14 +41,14 @@ through the API/projection with `version` for optimistic concurrency.
 UI command (e.g. MoveItem)
    │
    ▼
-Yjs mutation (parentId + rank registers)   ── applies locally, instant
+Yjs mutation (replace the item's atomic move register)   ── applies locally, instant
    │  websocket
    ▼
-Hocuspocus merge (LWW parent, list order, cycle reject)   ← conflicts resolved HERE
+Hocuspocus merge (LWW on whole move via HLC, deterministic cycle repair)   ← conflicts resolved HERE
    │  persist raw update → yjs_updates
    │  onChange (debounced)
    ▼
-Materializer → items upsert   (advisory lock on hashtext(document_id))
+Materializer → items upsert   (advisory lock + monotonic projected_rev, ADR-0013)
    │
    ▼
 API reads see the new projection

@@ -57,10 +57,18 @@ These are the parts people get wrong; they are decided, not optional.
    deterministic midpoint makes them collide every time. A small random jitter in the split
    spreads them out (birthday-bound math in the report). Vary by content, not by a shared
    deterministic midpoint.
-4. **`openSpace` on collision.** When inserting between two items that already share a rank,
-   open space rather than producing an ever-growing key.
-5. **LWW on `rank`.** Concurrent moves merge last-writer-wins on the rank field (with
-   `timestamp`, `replicaId`), consistent with the parent register. → [04-sync](./sync-and-conflict-resolution.md)
+4. **`openSpace` on collision — still touches only the moved item.** When inserting between
+   two items that already share a rank (a prior offline collision), `openSpace` computes a new
+   rank for **the item being inserted/moved**, extending key length if needed, so it sorts
+   cleanly relative to the collided pair. It does **not** renumber the existing siblings — the
+   "only the moved item's rank changes" guarantee holds. If two equal ranks must be *pried
+   apart* (rare — only when no representable string fits between them), that reordering is a
+   deliberate, logged **rebalance** of just those colliding keys (rule 6), broadcast as normal
+   LWW rank updates with bumped HLCs — never a silent bulk renumber on the insert path.
+5. **LWW on `rank` via the shared move HLC.** Concurrent moves merge last-writer-wins on the
+   whole `move` register — `rank` and `parentId` together, decided by the Hybrid Logical Clock
+   ([ADR-0009](./adr/0009-move-clock-hlc.md), [ADR-0010](./adr/0010-atomic-move-register.md)),
+   not by wall-clock time. → [04-sync](./sync-and-conflict-resolution.md)
 6. **Rebalance is an escape hatch, not a routine.** If keys grow pathologically long,
    a rebalance worker (V2) reassigns ranks and broadcasts them as normal LWW rank updates
    with bumped clocks, so offline peers converge. Offline clients holding old ranks lose the

@@ -11,11 +11,11 @@ concurrent tree moves"; this doc records the decisions.
 | Question | Decision |
 |----------|----------|
 | Conflict model | **CRDT** (Yjs), not OT | → [ADR-0002](./adr/0002-sync-engine-yjs-vs-localfirst.md) |
-| Structure representation | Per-item `parentId` + `rank` **LWW registers** in a `Y.Map`; rich text in `Y.Text` | → [ADR-0008](./adr/0008-yjs-document-schema.md), [yjs-schema.md](./yjs-schema.md) |
-| Concurrent move semantics | **Last-writer-wins on `parentId`**; sibling order is an **LWW fractional `rank` register**, read `(rank, id)` | → [ADR-0008](./adr/0008-yjs-document-schema.md) |
+| Structure representation | Per-item `parentId` + `rank` inside one **atomic `move` register** in a `Y.Map`; rich text in `Y.Text` | → [ADR-0008](./adr/0008-yjs-document-schema.md), [ADR-0010](./adr/0010-atomic-move-register.md), [yjs-schema.md](./yjs-schema.md) |
+| Concurrent move semantics | **Last-writer-wins on the whole `move`** (parentId+rank together); sibling order read `(rank, id)` | → [ADR-0008](./adr/0008-yjs-document-schema.md), [ADR-0010](./adr/0010-atomic-move-register.md) |
 | Tie-break | Hybrid Logical Clock `{ wallMs, counter, replicaId }`, compared in that order | → [ADR-0009](./adr/0009-move-clock-hlc.md) |
-| Cycle handling | Reject/normalize at merge; re-check when projecting |
-| Delete semantics | **Soft delete / tombstone**; GC hard-deletes later | → [ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md) |
+| Cycle handling | Deterministic repair at merge (youngest edge loses → freed item to root → emit `move`); projector detects, never vetoes | → [ADR-0012](./adr/0012-convergent-cycle-resolution.md) |
+| Delete semantics | Explicit CRDT `deleted` register (not a missing key); soft-delete projection; GC hard-deletes later | → [ADR-0011](./adr/0011-crdt-tombstone.md), [ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md) |
 | Where Postgres sits | Downstream **projection**, never a resolver | → [ADR-0004](./adr/0004-crdt-decides-postgres-records.md) |
 
 ## Why CRDT, not OT
@@ -33,19 +33,27 @@ Concurrent tree moves are the hard case. Two replicas can move the same item to 
 parents, or move items in ways that would create a cycle (A under B while B moves under A).
 Our decided semantics, per the report's recommended approach:
 
-1. **`parentId` is an LWW register per item.** Concurrent moves to different parents converge
-   to one winner deterministically via the **Hybrid Logical Clock** (`wallMs`, then `counter`,
-   then `replicaId`). The loser's move is dropped — not corrupted. → [ADR-0009](./adr/0009-move-clock-hlc.md)
-2. **Sibling order is an LWW fractional `rank` register**, sorted `(rank, id)` at read
+1. **`parentId` and `rank` are one atomic `move` register per item.** Concurrent moves to
+   different parents converge to one winner deterministically via the **Hybrid Logical Clock**
+   (`wallMs`, then `counter`, then `replicaId`). Because parent and rank travel together under
+   one HLC, the winner's *whole* placement wins — there is no torn `{parent from A, rank from
+   B}` outcome. The loser's move is dropped — not corrupted.
+   → [ADR-0009](./adr/0009-move-clock-hlc.md), [ADR-0010](./adr/0010-atomic-move-register.md)
+2. **Sibling order is the fractional `rank` inside that register**, sorted `(rank, id)` at read
    (ADR-0008). There is **no** `Y.Array` of child order in V1; inserting/moving between two
-   siblings sets only the moved item's `rank`. The known interleaving trade-off is accepted and
-   upgradeable to a list-CRDT in V2 without reshaping the relational model.
-   → [05-fractional-indexing](./fractional-indexing.md)
-3. **Cycles are rejected at merge.** Ancestor checks (closure table / CTE when projecting)
-   catch a move that would make the tree non-tree. The move is normalized or dropped, never
-   applied to produce a cycle.
-4. **Surface the outcome.** If a user's move lost to concurrency, show it in activity
-   history / a small conflict note so it doesn't feel arbitrary.
+   siblings sets only the moved item's `move` (new rank + fresh HLC). The known interleaving
+   trade-off is accepted and upgradeable to a list-CRDT in V2 without reshaping the relational
+   model. → [05-fractional-indexing](./fractional-indexing.md)
+3. **Cycles are repaired deterministically, not vetoed.** Two moves that are each valid can
+   combine into a cycle (A under B while B moves under A). On detection, every replica applies
+   the same rule — **break the youngest edge on the cycle (greatest `move.hlc`), reparent the
+   freed item to the document root with a fresh dominant HLC**, and emit that repair as an
+   ordinary `move`. The repair is a pure function of merged state, so replicas converge with no
+   coordinator; the projector detects cycles but never rejects into a loop.
+   → [ADR-0012](./adr/0012-convergent-cycle-resolution.md)
+4. **Surface the outcome.** If a user's move lost to concurrency, or was repaired to root to
+   break a cycle, show it in activity history / a small conflict note so it doesn't feel
+   arbitrary.
 
 ### Optional: mirror-on-conflict (V2)
 
@@ -75,14 +83,19 @@ they live at different layers:
 ## Delete & convergence
 
 Deletes are soft so an offline replica that never saw the delete converges instead of
-resurrecting rows:
+resurrecting rows. The delete fact lives in the CRDT plane as an explicit `deleted` register
+(LWW boolean + HLC), **never** as a removed `Y.Map` key — a missing key carries no clock, so it
+cannot converge or be undone. → [ADR-0011](./adr/0011-crdt-tombstone.md)
 
-1. **User delete** → set `deleted_at` on the subtree root (mark descendants via closure/CTE,
-   or treat descendants as implicitly deleted at read time). Emit a tombstone so peers
-   converge.
-2. **GC (background, tombstone-aware)** → after a retention window long enough that all
-   known replicas have synced past the tombstone, hard-delete bottom-up (leaves first) under
-   a document advisory lock. **Only GC issues physical `DELETE`.**
+1. **User delete** → set the subtree root's `deleted` register (`isDeleted:true`, fresh HLC);
+   descendants are marked via closure/CTE or treated as implicitly deleted at read time. The
+   register is the tombstone peers converge on. **Undo** sets `isDeleted:false` with a
+   strictly-greater HLC, so it deterministically wins even against a lagging replica. The
+   materializer projects the register to `deleted_at`.
+2. **GC (background, tombstone-aware)** → after a retention window long enough that all known
+   replicas have synced past the tombstone, hard-delete bottom-up (leaves first) under a
+   document advisory lock, removing both the `items` row and the item's Yjs key. **Only GC
+   issues physical `DELETE`**, and only from an already-converged tombstone.
 
 A raw `DELETE` on `items` MUST NOT be exposed to the app/API layer — it would race a
 concurrent LWW move-in. → [ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md)

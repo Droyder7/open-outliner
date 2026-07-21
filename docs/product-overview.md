@@ -71,3 +71,28 @@ in the schema (so V1 doesn't paint us into a corner) but not shipped. See
 - Two users editing the same document concurrently never see corruption or lost structure.
 - Reordering/moving 10k-item outlines stays responsive.
 - The whole thing self-hosts from a documented `docker compose` and a Postgres + S3.
+
+Each criterion above is only a **release gate** once it is *measurable* — with a defined
+workload, network/device profile, threshold, and expected conflict outcome. The measurable
+versions are tracked in [status.md](./status.md#v1-acceptance-gates); until defined there, these
+are goals, not gates.
+
+## Specification gaps to close before/with V1 build
+
+These are named product decisions that must be specified (not just implied) before the
+corresponding subsystem is built. They are tracked with owners/stages in
+[status.md](./status.md); listed here so the product surface is honest about what is undecided:
+
+- **Editor interaction semantics** — Enter, Tab/Shift-Tab, Backspace at boundaries, split/merge,
+  multi-selection, copy/paste (internal + external), collapse/expand, zoom navigation, drag
+  targets and validity, cross-document move, focus restoration, and invalid-operation behavior.
+  Core product semantics, not implementation details. → `WEB`
+- **Collaboration journey** — invitations, member removal, ownership transfer, viewer vs.
+  commenter capabilities, presence payload contents, stale-presence handling, conflict
+  notifications, and sharing/privacy. → `SEC`/`COL`
+- **Export contract** — required format(s), hierarchy + rich-text fidelity, attachment and
+  deleted-content policy, deterministic ordering, versioning, and a round-trip acceptance test.
+  "Own your data" (principle #5) is not real without this. → export gate
+- **Accessibility & mobile** — a WCAG target, semantic tree/ARIA pattern, screen-reader
+  behavior, a touch alternative to drag, mobile-keyboard and focus model, and the supported
+  device/browser matrix. → `WEB`

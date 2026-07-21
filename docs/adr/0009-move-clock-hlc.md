@@ -2,6 +2,12 @@
 
 **Status:** Accepted · **Date:** 2026-07-22 · **Deciders:** _TBD_
 
+> **Note (2026-07-22):** this ADR describes the HLC as guarding `parentId` + `rank` as two
+> sibling keys. [ADR-0010](./0010-atomic-move-register.md) tightens *what* the clock guards —
+> the HLC now lives inside a single atomic `move` register alongside `parentId` and `rank`,
+> written as one unit — but the clock's structure, comparison, and update rules below are
+> unchanged.
+
 ## Context
 
 Order and parent are **LWW registers** (ADR-0008): on a concurrent write, the item keeps the

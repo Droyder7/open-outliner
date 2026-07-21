@@ -61,8 +61,10 @@ and the decisions baked into them:
 
 The load-bearing decisions in this table:
 
-- **`parent_id UUID REFERENCES items(id) ON DELETE RESTRICT`** — *not* `CASCADE`. A cascade
-  would physically erase a subtree without writing tombstones and break offline
+- **`parent_id` references the composite `(id, document_id)` — same-document parenting.** A
+  child and its parent MUST belong to the same document; a cross-document parent is
+  structurally impossible (migration `0002`). Still `ON DELETE RESTRICT`, *not* `CASCADE`: a
+  cascade would physically erase a subtree without writing tombstones and break offline
   convergence. All user deletes are soft. → [ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md)
 - **`rank TEXT` with `COLLATE "C"`** — fractional index; byte-wise ordering is required.
 - **`deleted_at TIMESTAMPTZ`** — soft-delete tombstone for sync/undo.
@@ -112,8 +114,19 @@ Decisions:
 
 ## Invariants the model must always hold
 
-- No cycles in `parent_id` (enforced at CRDT merge and re-checked when projecting).
-- Exactly one live root per document.
+- No cycles in `parent_id` — enforced at CRDT merge by deterministic repair (youngest edge
+  loses, freed item to root), re-checked but never vetoed when projecting.
+  → [ADR-0012](./adr/0012-convergent-cycle-resolution.md)
+- **Exactly one live root per document.** The partial unique index enforces *at most* one live
+  root; "exactly one" is completed by two client-side/CRDT obligations the DB cannot express:
+  document creation always seeds one synthetic root, and the root's `move`/`deleted` registers
+  are **not user-mutable** — the editor MUST NOT let a user re-parent or delete the synthetic
+  root. Root movement/deletion is prevented at the command layer, not by SQL. → [ADR-0011](./adr/0011-crdt-tombstone.md)
+- **Same-document parenting** — a child and its parent share a `document_id`, enforced by the
+  composite `parent_id → (id, document_id)` FK (migration `0002`).
 - `rank` uniqueness is **not** assumed — total order is `(rank, id)`; ties are legal and
   broken deterministically. → [05-fractional-indexing](./fractional-indexing.md)
 - Structure changes only via the CRDT→projection path, never by direct SQL writes.
+- The `items` projection is **rebuildable** from Yjs by per-document upsert-and-GC (never a raw
+  `TRUNCATE`, which the inbound RESTRICT FKs forbid). → [06-yjs-projection](./yjs-projection.md)
+  "FK-safe rebuild procedure".
