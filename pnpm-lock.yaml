@@ -60,6 +60,10 @@ importers:
         version: 2.1.9(@types/node@22.20.1)
 
   packages/shared:
+    dependencies:
+      fractional-indexing:
+        specifier: ^3.2.0
+        version: 3.4.0
     devDependencies:
       typescript:
         specifier: ^5.7.2
@@ -825,6 +829,10 @@ packages:
 
   flatted@3.4.2:
     resolution: {integrity: sha512-PjDse7RzhcPkIJwy5t7KPWQSZ9cAbzQXcafsetQoD7sOJRQlGikNbx7yZp2OotDnJyrDcbyRq3Ttb18iYOqkxA==}
+
+  fractional-indexing@3.4.0:
+    resolution: {integrity: sha512-8J3glhz2rrpKG6KmI7wmJo3zH1VjeOpN+vTJSw1fOyO+Viqq3zX6/5NGh6oaZB2qIAYdOYuu5Dz9xp4faOO0Pg==}
+    engines: {node: ^14.13.1 || >=16.0.0}
 
   fs.realpath@1.0.0:
     resolution: {integrity: sha512-OO0pH2lK6a0hZnAdau5ItzHPI6pUlvI7jMVnxUQRtw4owF2wk8lOSabtGDCTP4Ggrg2MbGnWO9X8K1t4+fGMDw==}
@@ -1861,6 +1869,8 @@ snapshots:
       rimraf: 3.0.2
 
   flatted@3.4.2: {}
+
+  fractional-indexing@3.4.0: {}
 
   fs.realpath@1.0.0: {}
 
