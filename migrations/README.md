@@ -12,6 +12,7 @@ exploratory history, **not** authority.
 | `0001_init_v1.sql` | V1 baseline: tenancy, `items` (adjacency + fractional rank), tags, membership, change log, `yjs_updates`. |
 | `0002_integrity_v1.sql` | V1 integrity hardening: same-document parent FK, `attachments` table with same-document item FK, and `document_projection` (monotonic projection revisions + catch-up). |
 | `0003_sessions_and_membership_v1.sql` | Session auth + membership ([ADR-0014](../docs/adr/0014-session-auth-and-revocation.md)): `users` table; workspace-scoped `workspace_members` (owner + equal members, one-owner partial unique index); reconciles the stale `document_members.role` CHECK to `owner`/`member`; adds the killable server-side `sessions` store. |
+| `0004_yjs_updates_serial_v1.sql` | Adds the `id BIGSERIAL` PRIMARY KEY to `yjs_updates` that [ADR-0013](../docs/adr/0013-projection-revision-guard.md) relies on for `source_rev` (`0001` created the table without it). This is the monotonic key the projection revision guard compares. |
 
 ## Conventions
 

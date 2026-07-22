@@ -56,21 +56,25 @@ describe('detectCycles', () => {
 });
 
 describe('computeCycleRepairs — deterministic, convergent (ADR-0012)', () => {
-  it('breaks the YOUNGEST edge and reparents that item to root', () => {
+  it('breaks the YOUNGEST edge and reparents that item under the root item', () => {
     // X.parent=Y (older move), Y.parent=X (younger move) — Y closed the loop.
+    // A root item must exist in the doc (yjs-schema.md invariant); it is never
+    // itself part of a cycle (its parent is the sentinel, not another item).
     const nodes = [
-      node('X', 'Y', R0, hlc(5, 0, 'A')),
-      node('Y', 'X', R1, hlc(9, 0, 'B')),
+      node('root', ROOT_PARENT_SENTINEL, R0, hlc(1, 0, 'r')),
+      node('X', 'Y', R1, hlc(5, 0, 'A')),
+      node('Y', 'X', R2, hlc(9, 0, 'B')),
     ];
     const repairs = computeCycleRepairs(nodes, { replicaId: 'server', nowMs: 1000 });
     expect(repairs).toHaveLength(1);
-    // The greatest HLC is Y's — Y is freed to root.
+    // The greatest HLC is Y's — Y is freed to become a child of the root item.
     expect(repairs[0]!.itemId).toBe('Y');
-    expect(repairs[0]!.newParentId).toBe(ROOT_PARENT_SENTINEL);
+    expect(repairs[0]!.newParentId).toBe('root');
   });
 
   it('two independent replicas compute the byte-identical repair target', () => {
     const nodes = [
+      node('root', ROOT_PARENT_SENTINEL, R0, hlc(1, 0, 'r')),
       node('X', 'Y', R1, hlc(5, 0, 'A')),
       node('Y', 'X', R2, hlc(9, 0, 'B')),
     ];
@@ -86,6 +90,7 @@ describe('computeCycleRepairs — deterministic, convergent (ADR-0012)', () => {
   it('the repair HLC strictly dominates every HLC on the cycle', () => {
     const cycleMax = hlc(9, 0, 'B');
     const nodes = [
+      node('root', ROOT_PARENT_SENTINEL, R0, hlc(1, 0, 'r')),
       node('X', 'Y', R1, hlc(5, 0, 'A')),
       node('Y', 'X', R2, cycleMax),
     ];
@@ -101,7 +106,7 @@ describe('computeCycleRepairs — deterministic, convergent (ADR-0012)', () => {
   it('is idempotent — no repair on an already-acyclic tree', () => {
     const nodes = [
       node('root', ROOT_PARENT_SENTINEL, R0, hlc(1, 0, 'r')),
-      node('Y', ROOT_PARENT_SENTINEL, R1, hlc(10, 0, 'server')),
+      node('Y', 'root', R1, hlc(10, 0, 'server')),
       node('X', 'Y', R0, hlc(5, 0, 'A')),
     ];
     expect(computeCycleRepairs(nodes, { replicaId: 'server', nowMs: 1000 })).toEqual([]);

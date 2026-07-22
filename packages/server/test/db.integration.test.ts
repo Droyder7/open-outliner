@@ -40,7 +40,9 @@ describeDb('migrations + tenancy + sessions (integration)', () => {
 
   it('applies all migrations and is idempotent on re-run', async () => {
     const all = listMigrations(config.migrationsDir);
-    expect(all.map((m) => m.version)).toEqual([1, 2, 3]);
+    // Versions are contiguous starting at 1 (forward-only, no gaps).
+    expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1));
+    expect(all.length).toBeGreaterThanOrEqual(4);
     // Re-running applies nothing new.
     const second = await migrate(db, config.migrationsDir);
     expect(second.applied).toEqual([]);

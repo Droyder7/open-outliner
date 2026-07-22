@@ -11,9 +11,16 @@
  *  1. Identify the cycle (the set of items whose parent edges form the loop).
  *  2. Break the edge with the greatest `move.hlc` — the YOUNGEST move on the
  *     cycle (the one that closed the loop) is the one reverted.
- *  3. Reparent that freed item to the synthetic root, with a fresh rank at the
- *     end of the root's children (seeded deterministically by the freed item's
- *     id) and a new HLC strictly greater than every HLC on the broken cycle.
+ *  3. Reparent that freed item to top level, with a fresh rank at the end of the
+ *     root's children (seeded deterministically by the freed item's id) and a
+ *     new HLC strictly greater than every HLC on the broken cycle.
+ *
+ * "Reparent to the synthetic root" (ADR-0012) means becoming a CHILD of the
+ * document's one root item, not taking on the root's own null-sentinel parentId
+ * — exactly one item per document may have that (yjs-schema.md, enforced by
+ * `items_one_root_per_doc_idx`). The root item can never itself be on a cycle
+ * (its parent is the sentinel, never another item), so it is always a safe,
+ * always-existing reparent target.
  *
  * This module computes the repairs; applying them (writing the Yjs `move`) is
  * the caller's job.
@@ -21,7 +28,7 @@
 
 import { compareHlc, tickHlc, type Hlc } from './hlc.js';
 import { rankAfter, compareRank } from './fractional-index.js';
-import { ROOT_PARENT_SENTINEL, isRootParent } from './yjs-schema.js';
+import { isRootParent } from './yjs-schema.js';
 
 /** Minimal structural view of an item the repair needs. */
 export interface CycleNode {
@@ -31,10 +38,11 @@ export interface CycleNode {
   readonly hlc: Hlc;
 }
 
-/** A repair to apply: reparent `itemId` to root with a fresh rank + HLC. */
+/** A repair to apply: reparent `itemId` under the document's root item. */
 export interface CycleRepair {
   readonly itemId: string;
-  readonly newParentId: typeof ROOT_PARENT_SENTINEL;
+  /** The document's root item id (freed item becomes its child — top level). */
+  readonly newParentId: string;
   readonly newRank: string;
   readonly newHlc: Hlc;
   /** The cycle this repair breaks (ids), for surfacing/testing. */
@@ -96,12 +104,13 @@ export function detectCycles(nodes: readonly CycleNode[]): string[][] {
 /**
  * Compute the deterministic repair for a single cycle:
  *  - freed item = the cycle member with the greatest `move.hlc`,
- *  - reparented to root at end-of-children rank (seeded by freed id),
+ *  - reparented under the root item at end-of-children rank (seeded by freed id),
  *  - with an HLC strictly greater than every HLC on the cycle.
  */
 function repairForCycle(
   cycle: readonly string[],
   byId: ReadonlyMap<string, CycleNode>,
+  rootItemId: string,
   rootChildRanks: readonly string[],
   ctx: RepairContext,
 ): CycleRepair {
@@ -129,7 +138,7 @@ function repairForCycle(
 
   return {
     itemId: freed.id,
-    newParentId: ROOT_PARENT_SENTINEL,
+    newParentId: rootItemId,
     newRank,
     newHlc,
     cycle: [...cycle],
@@ -140,13 +149,21 @@ function repairForCycle(
  * Detect every cycle in the merged state and return the repair for each. The
  * caller applies each repair as a normal `move`-register write; re-running on
  * already-repaired state yields no repairs (idempotent, ADR-0012).
+ *
+ * Returns no repairs (rather than throwing) if the node set has no root item —
+ * that is a different, non-cycle problem (a document missing its synthetic
+ * root) outside this module's scope.
  */
 export function computeCycleRepairs(nodes: readonly CycleNode[], ctx: RepairContext): CycleRepair[] {
   const byId = new Map<string, CycleNode>();
   for (const n of nodes) byId.set(n.id, n);
 
-  const rootChildRanks: string[] = [];
-  for (const n of nodes) if (isRootParent(n.parentId)) rootChildRanks.push(n.rank);
+  const root = nodes.find((n) => isRootParent(n.parentId));
+  const cycles = detectCycles(nodes);
+  if (!root || cycles.length === 0) return [];
 
-  return detectCycles(nodes).map((cycle) => repairForCycle(cycle, byId, rootChildRanks, ctx));
+  const rootChildRanks: string[] = [];
+  for (const n of nodes) if (n.parentId === root.id) rootChildRanks.push(n.rank);
+
+  return cycles.map((cycle) => repairForCycle(cycle, byId, root.id, rootChildRanks, ctx));
 }
