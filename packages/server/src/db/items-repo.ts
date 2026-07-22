@@ -110,6 +110,38 @@ export async function upsertProjectedItem(
   );
 }
 
+/**
+ * Read a bounded-depth subtree rooted at `parentId` (or the document's true
+ * roots when `parentId` is null) — the API's **load-on-expand** read
+ * (api-and-write-path.md): callers page a large outline in by expanding
+ * nodes rather than fetching the whole document in one response. `depth`
+ * counts levels below `parentId` inclusive of its direct children (depth=1 ==
+ * children only, depth=2 == children + grandchildren, ...).
+ */
+export async function getSubtree(
+  db: Db,
+  documentId: string,
+  parentId: string | null,
+  depth: number,
+): Promise<ItemRow[]> {
+  const res = await db.query<ItemRow>(
+    `WITH RECURSIVE subtree AS (
+       SELECT *, 0 AS level FROM items
+        WHERE document_id = $1 AND parent_id IS NOT DISTINCT FROM $2 AND deleted_at IS NULL
+       UNION ALL
+       SELECT i.*, s.level + 1 FROM items i
+         JOIN subtree s ON i.parent_id = s.id
+        WHERE i.document_id = $1 AND i.deleted_at IS NULL AND s.level + 1 <= $3
+     )
+     SELECT id, document_id, parent_id, rank, type, content, note,
+            is_completed, is_collapsed, version, deleted_at
+       FROM subtree
+      ORDER BY level, rank, id`,
+    [documentId, parentId, depth],
+  );
+  return res.rows;
+}
+
 /** Pure metadata update via the API path with optimistic concurrency (version). */
 export interface MetadataUpdate {
   note?: string | null;
@@ -147,6 +179,18 @@ export async function updateItemMetadata(
       fields.color ?? null,
       fields.metadata ? JSON.stringify(fields.metadata) : null,
     ],
+  );
+  return res.rows[0] ?? null;
+}
+
+/** Look up one live item by id, for distinguishing not-found from a version conflict. */
+export async function getItemById(db: Db, documentId: string, id: string): Promise<ItemRow | null> {
+  const res = await db.query<ItemRow>(
+    `SELECT id, document_id, parent_id, rank, type, content, note,
+            is_completed, is_collapsed, version, deleted_at
+       FROM items
+      WHERE document_id = $1 AND id = $2 AND deleted_at IS NULL`,
+    [documentId, id],
   );
   return res.rows[0] ?? null;
 }

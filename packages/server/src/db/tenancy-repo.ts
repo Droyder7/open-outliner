@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { rankBetween } from '@open-outliner/shared';
 import type { Db, TxClient } from './db.js';
 
 /** Tenancy: workspaces, documents, membership. */
@@ -137,6 +139,49 @@ export async function listWorkspaceIdsForUser(db: Db, userId: string): Promise<s
     [userId],
   );
   return res.rows.map((r) => r.workspace_id);
+}
+
+/**
+ * Create a document for the API's `CreateDocument` command, with the root
+ * item id set equal to the document id.
+ *
+ * Why: the client (`session.ts`) derives a document's root item id
+ * deterministically as `rootId = documentId` so a brand-new *local-only*
+ * document is immediately typeable with no server round trip. If an
+ * API-created document seeded a *different* root item id, a client opening
+ * that document over Hocuspocus would (on the local-IndexedDB-empty path)
+ * author its own CRDT root at `documentId` while the projection already has
+ * a live root row at the other id — two rows with `parent_id IS NULL` for one
+ * document, violating `items_one_root_per_doc_idx`. Reusing the document id
+ * as the root item id makes that path idempotent instead: the client
+ * "creates" a root the projector then upserts onto the very same row.
+ */
+export async function createDocumentWithRoot(
+  db: Db,
+  workspaceId: string,
+  title: string,
+): Promise<{ documentId: string; rootItemId: string }> {
+  const documentId = randomUUID();
+  const rootRank = rankBetween(null, null);
+  await db.transaction(async (tx: TxClient) => {
+    await tx.query(`INSERT INTO documents (id, workspace_id, title) VALUES ($1, $2, $3)`, [
+      documentId,
+      workspaceId,
+      title,
+    ]);
+    await tx.query(
+      `INSERT INTO items (id, document_id, parent_id, rank, type, content)
+       VALUES ($1, $2, NULL, $3, 'bullet', '')`,
+      [documentId, documentId, rootRank],
+    );
+    await tx.query(`UPDATE documents SET root_item_id = $1 WHERE id = $2`, [documentId, documentId]);
+    await tx.query(
+      `INSERT INTO document_projection (document_id, source_rev, projected_rev)
+       VALUES ($1, 0, 0) ON CONFLICT (document_id) DO NOTHING`,
+      [documentId],
+    );
+  });
+  return { documentId, rootItemId: documentId };
 }
 
 export async function listDocuments(

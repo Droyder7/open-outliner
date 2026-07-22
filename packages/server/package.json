@@ -8,8 +8,8 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "test": "vitest run --passWithNoTests",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
     "migrate": "tsx src/db/migrate-cli.ts"
   },
   "dependencies": {
@@ -17,6 +17,7 @@
     "@open-outliner/crdt": "workspace:*",
     "@hocuspocus/server": "^2.15.2",
     "@hocuspocus/extension-database": "^2.15.2",
+    "@hocuspocus/common": "^2.15.2",
     "pg": "^8.13.1",
     "yjs": "^13.6.20"
   },

@@ -47,6 +47,9 @@ export type RpcResponse<M extends RpcMethod = RpcMethod> =
 // --- Method catalog ---------------------------------------------------------
 
 export const RPC_METHODS = [
+  'Signup',
+  'Login',
+  'Logout',
   'GetItems',
   'GetChildren',
   'UpdateItem',
@@ -76,6 +79,9 @@ export interface ItemView {
 
 /** Params per method. */
 export interface RpcParams {
+  Signup: { email: string; password: string; displayName?: string; workspaceName?: string };
+  Login: { email: string; password: string };
+  Logout: Record<string, never>;
   GetItems: { documentId: string; depth?: number };
   GetChildren: { documentId: string; parentId: string | null; depth?: number };
   // Pure content/metadata only — structural fields stay CRDT-only (ADR-0010).
@@ -100,6 +106,12 @@ export interface RpcParams {
 
 /** Result per method. */
 export interface RpcResult {
+  // Session is established via a Set-Cookie response header, not the JSON body
+  // (the session cookie is httpOnly — see docs/adr/0014). The body only echoes
+  // identity plus the CSRF token the client must echo back on later mutations.
+  Signup: { userId: string; csrfToken: string };
+  Login: { userId: string; csrfToken: string };
+  Logout: Record<string, never>;
   GetItems: { items: ItemView[] };
   GetChildren: { items: ItemView[] };
   UpdateItem: { item: ItemView };
@@ -115,6 +127,37 @@ export interface RpcResult {
 export function isRpcMethod(value: unknown): value is RpcMethod {
   return typeof value === 'string' && (RPC_METHODS as readonly string[]).includes(value);
 }
+
+/**
+ * Methods that don't require an existing session — the ones that establish one.
+ * Every other method requires a resolved session (`unauthorized` otherwise).
+ */
+export const RPC_PUBLIC_METHODS: readonly RpcMethod[] = ['Signup', 'Login'];
+
+/**
+ * Methods that only read state. Exempt from CSRF (no side effect to forge) and
+ * safe to fail fast offline rather than queue (offline-and-pwa.md).
+ */
+export const RPC_READ_METHODS: readonly RpcMethod[] = [
+  'GetItems',
+  'GetChildren',
+  'ListDocuments',
+  'WhoAmI',
+];
+
+/**
+ * Mutations that are naturally idempotent under blind retry (optimistic
+ * concurrency or `ON CONFLICT DO NOTHING` on the server), so the offline
+ * mutation outbox (`OFF`) may queue and replay them by client-generated
+ * `requestId` without a server-side dedup ledger. Methods outside this set
+ * (e.g. `CreateDocument`) are not safe to retry blindly and must fail fast
+ * offline instead of queuing.
+ */
+export const RPC_QUEUEABLE_METHODS: readonly RpcMethod[] = [
+  'UpdateItem',
+  'InviteMember',
+  'RemoveMember',
+];
 
 export function rpcOk<M extends RpcMethod>(result: RpcResult[M]): RpcResponse<M> {
   return { ok: true, result };

@@ -88,6 +88,9 @@ importers:
 
   packages/server:
     dependencies:
+      '@hocuspocus/common':
+        specifier: ^2.15.2
+        version: 2.15.3
       '@hocuspocus/extension-database':
         specifier: ^2.15.2
         version: 2.15.3(y-protocols@1.0.7(yjs@13.6.31))(yjs@13.6.31)

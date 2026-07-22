@@ -2,6 +2,8 @@ import type { Db } from './db.js';
 
 /** Killable server-side session store (ADR-0014). */
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface SessionRow {
   id: string;
   user_id: string;
@@ -34,6 +36,12 @@ export async function resolveSession(
   db: Db,
   sessionId: string,
 ): Promise<{ userId: string } | null> {
+  // A session id arrives as a raw client-controlled cookie value (REST) or WS
+  // handshake cookie — it is untrusted input, not yet known to be a UUID. Guard
+  // before the query so a malformed value returns "no session" instead of a raw
+  // Postgres "invalid input syntax for type uuid" error surfacing as a 500 / a
+  // WS connection crash.
+  if (!UUID_RE.test(sessionId)) return null;
   const res = await db.query<{ user_id: string }>(
     `UPDATE sessions SET last_seen_at = now()
       WHERE id = $1 AND revoked_at IS NULL AND expires_at > now()
