@@ -1,4 +1,4 @@
-export * from './yjs-node.js';
+export * from '@open-outliner/crdt';
 export * from './yjs-store.js';
 export * from './materialize.js';
 export * from './projector.js';

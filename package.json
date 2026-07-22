@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "Offline-first collaborative outliner (Workflowy-parity) on Yjs + PostgreSQL.",
-  "packageManager": "pnpm@9.15.0",
+  "packageManager": "pnpm@11.15.1",
   "engines": {
     "node": ">=18"
   },

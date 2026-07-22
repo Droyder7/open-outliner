@@ -17,7 +17,7 @@ import { loadConfig } from '../src/config.js';
 import { createUser, createWorkspace } from '../src/db/tenancy-repo.js';
 import { createYjsStore, type YjsStore } from '../src/crdt/yjs-store.js';
 import { createProjector, type Projector } from '../src/crdt/projector.js';
-import { writeMove, writeContent, writeField, readMove } from '../src/crdt/yjs-node.js';
+import { writeMove, writeContent, writeField, writeDeleted, readMove } from '@open-outliner/crdt';
 import { NODE_KEY } from '@open-outliner/shared';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -142,7 +142,6 @@ describeDb('CRDT persistence spine (COL + MAT)', () => {
 
     // Tombstone the parent only; the child must disappear from live reads (lazy).
     writeField(client.doc, parentId, NODE_KEY.type, 'bullet'); // touch to bump
-    const { writeDeleted } = await import('../src/crdt/yjs-node.js');
     writeDeleted(client.doc, parentId, buildDelete(undefined, ctx()));
     await client.sync();
     await projector.projectDocument(documentId);

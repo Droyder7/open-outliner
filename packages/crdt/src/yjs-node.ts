@@ -19,9 +19,10 @@ import {
  *
  * The plain shapes and rules live in `@open-outliner/shared` (dependency-free,
  * unit-tested). This module is the ONE place that translates them to/from live
- * `Y.Map`/`Y.Text` structures, so the atomic-move discipline (ADR-0010 — the
- * whole `move` value is replaced in a single transaction, never a bare
- * `set('rank')`) is enforced in code, not by convention.
+ * `Y.Map`/`Y.Text` structures — imported by BOTH the client editor binding and
+ * the server materializer, so the atomic-move discipline (ADR-0010 — the whole
+ * `move` value is replaced in a single transaction, never a bare `set('rank')`)
+ * is enforced by shared code, not by convention on each side.
  */
 
 export function itemsMap(doc: Y.Doc): Y.Map<Y.Map<unknown>> {
@@ -73,11 +74,23 @@ function readType(node: Y.Map<unknown>): ItemType {
   return isItemType(t) ? t : 'bullet';
 }
 
-function readText(node: Y.Map<unknown>, key: string): string {
+export function nodeText(node: Y.Map<unknown>, key: string): string {
   const t = node.get(key);
   if (t instanceof Y.Text) return t.toString();
   if (typeof t === 'string') return t;
   return '';
+}
+
+/** The item's content Y.Text, created if absent (for TipTap binding). */
+export function contentText(doc: Y.Doc, id: string): Y.Text | undefined {
+  const node = itemsMap(doc).get(id);
+  if (!node) return undefined;
+  let text = node.get(NODE_KEY.content);
+  if (!(text instanceof Y.Text)) {
+    text = new Y.Text();
+    node.set(NODE_KEY.content, text);
+  }
+  return text as Y.Text;
 }
 
 /** Read one item node into the plain, plane-complete snapshot the projector uses. */
@@ -90,10 +103,10 @@ export function readNodeSnapshot(id: string, node: Y.Map<unknown>): ItemNodeSnap
     move,
     deleted: readDeleted(node),
     type: readType(node),
-    content: readText(node, NODE_KEY.content),
+    content: nodeText(node, NODE_KEY.content),
     isCompleted: node.get(NODE_KEY.isCompleted) === true,
     isCollapsed: node.get(NODE_KEY.isCollapsed) === true,
-    ...(noteText !== undefined ? { note: readText(node, NODE_KEY.note) } : {}),
+    ...(noteText !== undefined ? { note: nodeText(node, NODE_KEY.note) } : {}),
   };
   return snapshot;
 }
@@ -108,7 +121,7 @@ export function readAllSnapshots(doc: Y.Doc): ItemNodeSnapshot[] {
   return out;
 }
 
-// --- Writers (used by tests, cycle repair, and the Phase 4 editor binding) ---
+// --- Writers: every structural change is one atomic transaction (ADR-0010) ---
 
 /**
  * Create or replace an item node's atomic `move` register in ONE transaction

@@ -5,7 +5,7 @@ import type { Db, TxClient } from '../db/db.js';
 import { withDocumentLock } from '../db/db.js';
 import { upsertProjectedItem, getAllItemRows, type ProjectedItem } from '../db/items-repo.js';
 import type { YjsStore } from './yjs-store.js';
-import { readAllSnapshots, itemsMap } from './yjs-node.js';
+import { readAllSnapshots, itemsMap } from '@open-outliner/crdt';
 import { projectSnapshots } from './materialize.js';
 
 /**
