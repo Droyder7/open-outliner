@@ -20,6 +20,10 @@ import {
   getIsCompleted,
   toggleCompleted,
   mergeIntoPrevious,
+  splitItem,
+  getParentId,
+  hasChildren,
+  getContentText,
   type Actor,
 } from '../src/outline.js';
 
@@ -196,5 +200,43 @@ describe('outline model — structural commands (ADR-0017)', () => {
     // b's child is re-parented onto a; b itself is gone from live reads.
     expect(getChildren(doc, rootId).map((n) => n.id)).toEqual([a]);
     expect(getChildren(doc, a).map((n) => n.id)).toEqual([child]);
+  });
+
+  it('getParentId and hasChildren reflect live structure', () => {
+    const a = randomUUID();
+    const b = randomUUID();
+    insertItem(doc, a, rootId, undefined, actor);
+    insertItem(doc, b, a, undefined, actor);
+    expect(getParentId(doc, a)).toBe(rootId);
+    expect(getParentId(doc, b)).toBe(a);
+    expect(hasChildren(doc, a)).toBe(true);
+    expect(hasChildren(doc, b)).toBe(false);
+  });
+
+  it('splitItem keeps the prefix, moves the suffix to a new sibling below', () => {
+    const a = randomUUID();
+    insertItem(doc, a, rootId, undefined, actor);
+    getContentYText(doc, a)!.insert(0, 'hello world');
+
+    const newId = randomUUID();
+    expect(splitItem(doc, a, 5, newId, actor)).toBe(true);
+
+    expect(getContentText(doc, a)).toBe('hello');
+    expect(getContentText(doc, newId)).toBe(' world');
+    // The new item is a's next sibling (same parent), ordered immediately after.
+    expect(getChildren(doc, rootId).map((n) => n.id)).toEqual([a, newId]);
+    expect(getParentId(doc, newId)).toBe(rootId);
+  });
+
+  it('splitItem at end of text creates an empty new sibling (Enter on a full line)', () => {
+    const a = randomUUID();
+    insertItem(doc, a, rootId, undefined, actor);
+    getContentYText(doc, a)!.insert(0, 'done');
+
+    const newId = randomUUID();
+    splitItem(doc, a, 4, newId, actor);
+    expect(getContentText(doc, a)).toBe('done');
+    expect(getContentText(doc, newId)).toBe('');
+    expect(getChildren(doc, rootId).map((n) => n.id)).toEqual([a, newId]);
   });
 });

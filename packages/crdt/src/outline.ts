@@ -261,6 +261,42 @@ export function getContentText(doc: Y.Doc, id: string): string {
   return node ? nodeText(node, NODE_KEY.content) : '';
 }
 
+/** The parent id of an item (ROOT_PARENT_SENTINEL for the root), or undefined if absent. */
+export function getParentId(doc: Y.Doc, id: string): string | undefined {
+  const node = itemsMap(doc).get(id);
+  const move = node && readMove(node);
+  return move ? move.parentId : undefined;
+}
+
+/** True iff the item has at least one live child. */
+export function hasChildren(doc: Y.Doc, id: string): boolean {
+  return getChildren(doc, id).length > 0;
+}
+
+/**
+ * Enter-split (ADR-0017): text after `offset` becomes a NEW SIBLING below `id`,
+ * with a rank between `id` and its next sibling. `id` keeps the text before the
+ * caret; the new item (caller-provided `newId`) receives the remainder. One
+ * atomic transaction — the truncation and the insert never project half-applied.
+ */
+export function splitItem(doc: Y.Doc, id: string, offset: number, newId: string, actor: Actor): boolean {
+  const node = itemsMap(doc).get(id);
+  const move = node && readMove(node);
+  if (!move) return false;
+  const text = getContentYText(doc, id);
+  const full = text?.toString() ?? '';
+  const clamped = Math.max(0, Math.min(offset, full.length));
+  const after = full.slice(clamped);
+  Y.transact(doc, () => {
+    if (text && after.length > 0) text.delete(clamped, text.length - clamped);
+    insertItem(doc, newId, move.parentId, id, actor);
+    const newText = getContentYText(doc, newId);
+    if (newText && after.length > 0) newText.insert(0, after);
+  });
+  return true;
+}
+
+
 /** The item's content Y.Text, for a character-level collaborative text binding. */
 export function getContentYText(doc: Y.Doc, id: string): Y.Text | undefined {
   return contentText(doc, id);
