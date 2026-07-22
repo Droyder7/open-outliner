@@ -6,9 +6,9 @@ import { createRoot, getRootId, getChildren, insertItem, type Actor } from '@ope
 /**
  * A client editing session for one document: the Y.Doc, its local IndexedDB
  * persistence (offline-first, ADR-0015 client side), and — only when a sync URL
- * is configured — a Hocuspocus provider to the Phase 3 server. With no sync URL
- * the app is a fully usable local outliner; the server round-trip is opt-in
- * until the auth boundary (Phase 5) lands.
+ * is configured — a Hocuspocus provider to the Phase 3 server, authenticated by
+ * the session cookie the browser attaches to the WS handshake automatically
+ * (Phase 5/SEC). With no sync URL the app is a fully usable local outliner.
  */
 
 const REPLICA_KEY = 'oo:replicaId';
@@ -21,6 +21,30 @@ function getReplicaId(): string {
     localStorage.setItem(REPLICA_KEY, id);
   }
   return id;
+}
+
+/**
+ * Wait (briefly) for the provider's first server sync before deciding
+ * whether this document needs a root seeded. Without this, a fresh browser
+ * tab with an empty local IndexedDB cache — opening a document that already
+ * exists server-side (e.g. created via the `CreateDocument` RPC) — could
+ * author its OWN root before the real state arrives over the socket,
+ * racing the "exactly one root per document" invariant. Bounded so a
+ * genuinely offline client still becomes usable (product principle #1):
+ * no server round trip is required to type.
+ */
+function waitForInitialSync(provider: HocuspocusProvider | undefined, timeoutMs = 4000): Promise<void> {
+  if (!provider) return Promise.resolve();
+  if (provider.synced) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, timeoutMs);
+    const onSynced = (): void => {
+      clearTimeout(timer);
+      provider.off('synced', onSynced);
+      resolve();
+    };
+    provider.on('synced', onSynced);
+  });
 }
 
 export interface Session {
@@ -52,9 +76,10 @@ export function createSession(documentId: string): Session {
     actor,
     documentId,
     rootId,
-    whenReady: idb.whenSynced.then(() => {
-      // Seed a root + first empty bullet once local state has loaded, so a
-      // brand-new document is immediately typeable.
+    whenReady: Promise.all([idb.whenSynced, waitForInitialSync(provider)]).then(() => {
+      // Seed a root + first empty bullet once local AND (if configured) server
+      // state has loaded, so a brand-new document is immediately typeable
+      // without racing an existing server-seeded root (see waitForInitialSync).
       if (!getRootId(doc)) createRoot(doc, rootId, actor);
       if (getChildren(doc, rootId).length === 0) {
         insertItem(doc, crypto.randomUUID(), rootId, undefined, actor);
@@ -68,3 +93,4 @@ export function createSession(documentId: string): Session {
   };
   return session;
 }
+
