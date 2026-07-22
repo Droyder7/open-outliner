@@ -22,7 +22,8 @@ designed so V2 doesn't require a reshape. Mirrors report §"Recommended V1 vs V2
 
 **Features**
 - Infinite nesting, zoom, keyboard/drag reorder + re-parent.
-- Rich-text items (TipTap), multi-document workspace, presence.
+- Plain-text items (`Y.Text`, direct binding — [ADR-0018](./adr/0018-plain-text-content-v1.md)),
+  multi-document workspace, presence.
 - Tags, basic links, soft delete + undo, export.
 - Offline image capture with deferred upload (basic).
 
@@ -32,6 +33,8 @@ corruption; 10k-item outlines stay responsive; self-host from `docker compose` +
 ## V2 — scale + Workflowy parity
 
 - **`item_closure`** (or maintained `ltree path`) as a read accelerator.
+- **Rich-text marks** (bold/italic/links/inline code) via a `Y.Text.format()` mark model —
+  V1 shipped plain text only ([ADR-0018](./adr/0018-plain-text-content-v1.md)).
 - **`item_refs`** — mirrors / multi-parent DAG; mirror-on-conflict mode.
 - **`views`** — board / table views over items.
 - **Permission inheritance** down the tree via closure.

@@ -1,13 +1,17 @@
 # ADR-0008 — Yjs document schema & order model
 
 **Status:** Accepted (schema shape refined by [ADR-0010](./0010-atomic-move-register.md); delete
-register added by [ADR-0011](./0011-crdt-tombstone.md)) · **Date:** 2026-07-22 · **Deciders:** _TBD_
+register added by [ADR-0011](./0011-crdt-tombstone.md); content binding corrected by
+[ADR-0018](./0018-plain-text-content-v1.md)) · **Date:** 2026-07-22 · **Deciders:** _TBD_
 
 > **Note (2026-07-22):** the flat `parentId` / `rank` / `move` layout below is superseded by
 > [ADR-0010](./0010-atomic-move-register.md), which folds `parentId` + `rank` + `hlc` into one
 > atomic `move` register to prevent torn moves, and by [ADR-0011](./0011-crdt-tombstone.md),
 > which adds an explicit `deleted` register. The order-model decision (LWW rank, no `Y.Array`)
-> is unchanged. The living, corrected shape is in [yjs-schema.md](../yjs-schema.md).
+> is unchanged. `content` below says "TipTap-bound" — that binding is corrected by
+> [ADR-0018](./0018-plain-text-content-v1.md): `content` stays `Y.Text` exactly as pinned here,
+> but the client binds it directly rather than through TipTap, and V1 content is plain text.
+> The living, corrected shape is in [yjs-schema.md](../yjs-schema.md).
 
 ## Context
 

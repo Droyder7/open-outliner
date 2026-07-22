@@ -81,7 +81,7 @@ export function nodeText(node: Y.Map<unknown>, key: string): string {
   return '';
 }
 
-/** The item's content Y.Text, created if absent (for TipTap binding). */
+/** The item's content Y.Text, created if absent. */
 export function contentText(doc: Y.Doc, id: string): Y.Text | undefined {
   const node = itemsMap(doc).get(id);
   if (!node) return undefined;

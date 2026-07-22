@@ -20,7 +20,7 @@ resolver. Hold this invariant and the rest of the design follows.
 ```
 ┌─────────────────────────── CLIENT (React/Vite PWA) ───────────────────────────┐
 │                                                                                │
-│  UI (outliner components, TipTap rich text)                                    │
+│  UI (outliner components, direct Y.Text binding — ADR-0018)                    │
 │      │  binds to                                                               │
 │      ▼                                                                          │
 │  Yjs document  ──────────►  y-indexeddb  ──►  IndexedDB (local persistence)    │
@@ -60,7 +60,7 @@ architecture wrong.
 
 | Plane | Carries | Path | Source of truth |
 |-------|---------|------|-----------------|
-| **CRDT plane** | Outline structure + rich text | Yjs ⇄ Hocuspocus, persisted as `yjs_updates` | **Yjs doc** |
+| **CRDT plane** | Outline structure + text | Yjs ⇄ Hocuspocus, persisted as `yjs_updates` | **Yjs doc** |
 | **Projection plane** | Queryable rows (search, views, API) | Materializer → Postgres | Derived (rebuildable) |
 | **Blob plane** | Images / file attachments | IndexedDB outbox → S3, referenced by items | **S3 + `attachments` row** |
 

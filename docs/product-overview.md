@@ -51,7 +51,10 @@ These are load-bearing; feature decisions defer to them.
 
 - Infinite nesting; zoom into any item as a temporary root.
 - Drag/keyboard reordering and re-parenting with instant local feedback.
-- Rich-text item content (bold/italic/links/inline code at minimum).
+- Plain-text item content. **V1 scope note:** rich-text marks (bold/italic/links/inline code)
+  are cut from V1 and deferred to V2 — TipTap's Yjs binding requires a `Y.XmlFragment`,
+  incompatible with the pinned `Y.Text` content field ([ADR-0008](./adr/0008-yjs-document-schema.md)),
+  and a `Y.Text`-native mark model is unstarted work ([ADR-0018](./adr/0018-plain-text-content-v1.md)).
 - Multiple documents inside a workspace; global cross-document navigation.
 - Real-time multiplayer with presence/awareness.
 - Offline editing with automatic sync on reconnect.
@@ -61,7 +64,8 @@ These are load-bearing; feature decisions defer to them.
 ## Explicitly out of V1
 
 Mirrors/transclusion (multi-parent DAG), board/table views, server-side full-text search,
-permission inheritance, and attachment-heavy workflows are **V2**. They are designed-for
+permission inheritance, attachment-heavy workflows, and **rich-text marks** (bold/italic/links/
+inline code — [ADR-0018](./adr/0018-plain-text-content-v1.md)) are **V2**. They are designed-for
 in the schema (so V1 doesn't paint us into a corner) but not shipped. See
 [12-roadmap](./roadmap.md) for the exact line.
 

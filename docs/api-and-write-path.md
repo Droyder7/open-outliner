@@ -10,7 +10,7 @@ How writes flow through the system, and the command surface the app exposes. Mir
 **Clients never write SQL, and structure is never mutated by writing `items` directly.**
 Clients speak two protocols:
 
-- **Yjs (over WebSocket)** — for outline structure and rich text. This is the write path
+- **Yjs (over WebSocket)** — for outline structure and text content. This is the write path
   for anything that is part of the tree.
 - **REST/RPC API** — for queries, auth, attachment presigning, workspace/settings, and other
   non-CRDT operations.

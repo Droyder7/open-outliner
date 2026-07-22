@@ -27,7 +27,7 @@ Workspace  (tenant / account)
 - **Document** — Dynalist's multi-doc and Workflowy's single-infinite-doc both map here.
   Each document has **exactly one synthetic root item** so every real bullet has a parent
   (simplifies recursion and zoom). Enforced by the partial unique index, not a CHECK.
-- **Item** — a bullet with rich-text content, a parent, ordered siblings, and metadata.
+- **Item** — a bullet with text content (plain text in V1 — [ADR-0018](./adr/0018-plain-text-content-v1.md)), a parent, ordered siblings, and metadata.
 
 ## Hierarchy strategy — decided
 

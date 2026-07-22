@@ -1,6 +1,12 @@
 # ADR-0001 — Web-first PWA + Yjs + Node/Postgres stack (Pattern 1)
 
-**Status:** Accepted · **Date:** 2026-07-21 · **Deciders:** _TBD_
+**Status:** Accepted (rich-text editor choice corrected by [ADR-0018](./0018-plain-text-content-v1.md)) · **Date:** 2026-07-21 · **Deciders:** _TBD_
+
+> **Note (2026-07-22):** "TipTap is the rich-text editor bound to Yjs" below is corrected by
+> [ADR-0018](./0018-plain-text-content-v1.md) — TipTap's Yjs binding requires a
+> `Y.XmlFragment`, incompatible with the pinned `Y.Text` content field (ADR-0008). V1 binds
+> `Y.Text` directly and ships plain-text content; TipTap is not used. Everything else in this
+> ADR (PWA client, Yjs/Hocuspocus, Node/Postgres/S3) is unchanged.
 
 ## Context
 

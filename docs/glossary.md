@@ -8,7 +8,7 @@ Terms used consistently across all docs. When a doc uses one of these, it means 
 |------|------------|
 | **Workspace** | The tenant / account boundary. Everything scopes under it. |
 | **Document** | A "file" within a workspace; has exactly one synthetic root item. Workflowy's single doc and Dynalist's multi-doc both map here. |
-| **Item** | The atomic unit: a bullet with rich-text content, a parent, ordered siblings, tags, and metadata. |
+| **Item** | The atomic unit: a bullet with text content (plain text in V1 — [ADR-0018](./adr/0018-plain-text-content-v1.md)), a parent, ordered siblings, tags, and metadata. |
 | **Synthetic root** | The single `parent_id IS NULL` item per document, so every real bullet has a parent. Enforced by a partial unique index. |
 | **Adjacency list** | Hierarchy stored as each item pointing to its `parent_id`. **The source of truth** for structure. |
 | **Closure table** | Precomputed ancestor↔descendant pairs (`item_closure`). An optional **read accelerator** (V2), not the source of truth. |
@@ -21,7 +21,7 @@ Terms used consistently across all docs. When a doc uses one of these, it means 
 | **Jitter** | Small randomization at rank generation to lower concurrent-collision rate between offline clients. |
 | **Rebalance** | Rare escape-hatch pass that reassigns ranks when keys grow pathologically long; broadcast as LWW rank updates. |
 | **CRDT** | Conflict-free Replicated Data Type. Converges concurrent edits with no central resolver. We use **Yjs**. |
-| **Yjs** | The chosen CRDT engine. The **source of truth** for outline structure and rich text. |
+| **Yjs** | The chosen CRDT engine. The **source of truth** for outline structure and text content. |
 | **Hocuspocus** | The Yjs-compatible WebSocket server; hosts the materializer hook. |
 | **LWW register** | Last-Writer-Wins value keyed by `(timestamp, replicaId)`. Used for the `parent` and `rank` fields. |
 | **Materializer** | Server-side component (Hocuspocus `onChange` hook) that projects merged Yjs state into Postgres rows. → [06](./yjs-projection.md) |

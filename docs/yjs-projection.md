@@ -43,7 +43,8 @@ Client edits ──► Yjs doc (authoritative structure + text)
   projector reads a whole winning move, never a torn `{parentId, rank}` pair. Delete is an
   explicit `deleted` register (ADR-0011), not a missing key.
   → [yjs-schema.md](./yjs-schema.md), [04-sync](./sync-and-conflict-resolution.md)
-- **Rich content** lives in a `Y.Text` (or fragment) per item, bound to TipTap.
+- **Content** lives in a `Y.Text` per item, bound directly (no TipTap/ProseMirror layer) — V1
+  content is plain text, marks deferred to V2 ([ADR-0018](./adr/0018-plain-text-content-v1.md)).
 - The Yjs doc — **not Postgres** — owns all of this. Postgres never sees an unresolved state.
 
 ## Who writes the `items` rows — the mechanics

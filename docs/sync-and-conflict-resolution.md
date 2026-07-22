@@ -11,7 +11,7 @@ concurrent tree moves"; this doc records the decisions.
 | Question | Decision |
 |----------|----------|
 | Conflict model | **CRDT** (Yjs), not OT | → [ADR-0002](./adr/0002-sync-engine-yjs-vs-localfirst.md) |
-| Structure representation | Per-item `parentId` + `rank` inside one **atomic `move` register** in a `Y.Map`; rich text in `Y.Text` | → [ADR-0008](./adr/0008-yjs-document-schema.md), [ADR-0010](./adr/0010-atomic-move-register.md), [yjs-schema.md](./yjs-schema.md) |
+| Structure representation | Per-item `parentId` + `rank` inside one **atomic `move` register** in a `Y.Map`; content in `Y.Text` (plain text, V1 — [ADR-0018](./adr/0018-plain-text-content-v1.md)) | → [ADR-0008](./adr/0008-yjs-document-schema.md), [ADR-0010](./adr/0010-atomic-move-register.md), [yjs-schema.md](./yjs-schema.md) |
 | Concurrent move semantics | **Last-writer-wins on the whole `move`** (parentId+rank together); sibling order read `(rank, id)` | → [ADR-0008](./adr/0008-yjs-document-schema.md), [ADR-0010](./adr/0010-atomic-move-register.md) |
 | Tie-break | Hybrid Logical Clock `{ wallMs, counter, replicaId }`, compared in that order | → [ADR-0009](./adr/0009-move-clock-hlc.md) |
 | Cycle handling | Deterministic repair at merge (youngest edge loses → freed item to root → emit `move`); projector detects, never vetoes | → [ADR-0012](./adr/0012-convergent-cycle-resolution.md) |

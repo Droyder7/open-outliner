@@ -1,6 +1,13 @@
 # ADR-0017 — Editor interaction model: Workflowy-parity
 
-**Status:** Accepted · **Date:** 2026-07-22 · **Deciders:** _TBD_
+**Status:** Accepted (editor binding corrected by [ADR-0018](./0018-plain-text-content-v1.md)) · **Date:** 2026-07-22 · **Deciders:** _TBD_
+
+> **Note (2026-07-22):** "a TipTap/ProseMirror binding" in Consequences below is corrected by
+> [ADR-0018](./0018-plain-text-content-v1.md) — the client binds each item's `Y.Text` directly
+> (no TipTap/ProseMirror layer). Every structural change is still one atomic `move`-value
+> replacement in one Yjs transaction, exactly as decided here; only the content-editing binding
+> mechanism changed. The keymap, flattened-visible-order model, and all other decisions in this
+> ADR are unaffected.
 
 ## Context
 

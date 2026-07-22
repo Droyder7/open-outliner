@@ -1,6 +1,14 @@
 # ADR-0016 — Export contract: Markdown + JSON round-trip
 
-**Status:** Accepted · **Date:** 2026-07-22 · **Deciders:** _TBD_
+**Status:** Accepted (rich-text/marks scope narrowed by [ADR-0018](./0018-plain-text-content-v1.md)) · **Date:** 2026-07-22 · **Deciders:** _TBD_
+
+> **Note (2026-07-22):** this ADR's Markdown/JSON marks language (bold/italic/links/inline code,
+> "the JSON side reuses the Yjs/TipTap content model so marks survive") assumed TipTap would
+> supply rich text. [ADR-0018](./0018-plain-text-content-v1.md) drops TipTap and cuts marks from
+> V1 scope — V1 content is plain text, so V1 export serializes plain text on both the Markdown
+> and JSON sides. The round-trip contract (deterministic `(rank,id)` order, tombstones excluded,
+> attachments referenced) is unchanged. The marks/TipTap-content-model language below is
+> aspirational for a V2 mark model, not a V1 deliverable.
 
 ## Context
 

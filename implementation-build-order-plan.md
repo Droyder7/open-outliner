@@ -24,7 +24,7 @@ open-outliner/
    │             #   RPC command + error types. Pure TS, zero I/O, unit-tested.
    ├─ server/    # Node: Hocuspocus + persistence adapter, materializer,
    │             #   /rpc API, auth/sessions, background jobs. Imports shared.
-   └─ client/    # Vite React PWA: TipTap⇄Yjs binding, y-indexeddb,
+   └─ client/    # Vite React PWA: direct Y.Text binding, y-indexeddb,
                  #   Hocuspocus provider, editor keymap. Imports shared.
 ```
 
@@ -71,7 +71,7 @@ Add a migration runner. Migrations `0001`+`0002` already exist and are the schem
 **Gate (spine proof):** a headless Yjs client edits a doc → update lands in `yjs_updates` → materializer writes rows to `items` → read back reflects structure + order. Concurrent two-client merge converges with no torn move and no cycle.
 
 ### Phase 4 — Client shell + editor (`WEB`) — *closes the slice through the UI*
-- Vite React PWA shell; TipTap (ProseMirror) bound to Yjs; `y-indexeddb` local persistence; Hocuspocus provider to the Phase 3 server.
+- Vite React PWA shell; direct `Y.Text` binding to Yjs (TipTap dropped, [ADR-0018](./docs/adr/0018-plain-text-content-v1.md)); `y-indexeddb` local persistence; Hocuspocus provider to the Phase 3 server.
 - **First:** plain bullet typing — completes the end-to-end slice through a real browser (type → Yjs → persist → materialize → reload).
 - **Then:** Workflowy-parity keymap (ADR-0017) — Enter split, Tab/Shift-Tab indent/outdent, Backspace merge, Cmd/Ctrl-↑↓ move, collapse/expand (`isCollapsed` LWW), zoom (client-side), multi-select over flattened visible order, copy/paste (internal structured + external Markdown), drag with cycle-safe drop validity, cross-document move = cut-and-reinsert, uniform invalid-op = no-op. **Every structural change is one atomic `move` transaction.** The synthetic root register is not user-mutable.
 **Gate:** the vertical slice is a usable single-user outliner in the browser; keymap operations behave per ADR-0017.

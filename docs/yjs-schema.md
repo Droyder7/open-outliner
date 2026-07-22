@@ -30,7 +30,8 @@ itemNode (Y.Map):
                               isDeleted : boolean  — LWW; true = tombstoned
                               hlc       : Y.Map     — HLC guarding the delete/undo ordering
   type        : string   — LWW enum: 'bullet' | 'task' | 'heading' | 'divider'
-  content     : Y.Text   — collaborative rich text, TipTap-bound
+  content     : Y.Text   — collaborative text, bound directly (no editor framework); V1 is
+                              plain text, marks deferred to V2 (ADR-0018)
   isCompleted : boolean  — LWW
   isCollapsed : boolean  — LWW
   note        : Y.Text?   — optional Dynalist-style note body (collaborative)

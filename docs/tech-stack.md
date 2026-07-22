@@ -9,8 +9,8 @@ stack. Each row records the choice and the main alternative we rejected.
 
 | Layer | Choice | Why | Rejected alternative |
 |-------|--------|-----|----------------------|
-| **Client framework** | React + TypeScript + **Vite** | Richest ecosystem for TipTap + Yjs + PWA tooling | Vue/Svelte/Solid — fine, but thinner collab/editor ecosystem |
-| **Rich text / editor** | **TipTap** (ProseMirror) bound to Yjs | Battle-tested Yjs binding, block-friendly | Slate, Lexical — weaker Yjs story at decision time |
+| **Client framework** | React + TypeScript + **Vite** | Richest ecosystem for Yjs + PWA tooling | Vue/Svelte/Solid — fine, but thinner collab/editor ecosystem |
+| **Rich text / editor** | Direct **`Y.Text`** binding (no editor framework) | Matches the pinned `Y.Text` schema exactly ([ADR-0008](./adr/0008-yjs-document-schema.md)); V1 content is plain text ([ADR-0018](./adr/0018-plain-text-content-v1.md)) | **TipTap** (ProseMirror) — rejected: its Yjs `Collaboration` extension requires a `Y.XmlFragment`, incompatible with the pinned `Y.Text` field |
 | **Collab / CRDT** | **Yjs** | De-facto standard for collaborative editors; text + tree | Automerge (heavier), OT (harder move semantics) |
 | **Realtime transport** | **Hocuspocus** (Yjs WS server) | Turnkey Yjs server with hooks for persistence + projection | Custom WS service — more control, more to build |
 | **Local persistence** | **IndexedDB** via Dexie / `y-indexeddb` | Durable local store; Yjs has a first-class provider | OPFS/SQLite-wasm — reserved for large blobs only |

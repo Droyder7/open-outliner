@@ -23,6 +23,7 @@ one, add a new ADR that supersedes it and update the Status line here.
 | [0015](./0015-yjs-persistence-boundary.md) | Yjs persistence boundary: ack-after-persist, snapshots, compaction | Accepted |
 | [0016](./0016-export-contract.md) | Export contract: Markdown + JSON round-trip | Accepted |
 | [0017](./0017-editor-interaction-model.md) | Editor interaction model: Workflowy-parity | Accepted |
+| [0018](./0018-plain-text-content-v1.md) | V1 item content is plain text; TipTap dropped for a direct `Y.Text` binding | Accepted |
 
 ## Template
 
