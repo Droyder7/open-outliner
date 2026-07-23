@@ -1,0 +1,173 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "20"
+  PNPM_VERSION: "11.15.1"
+
+jobs:
+  # ── Lint + typecheck + unit tests (no external services) ──────────────
+  checks:
+    name: Lint, Typecheck & Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  # ── Integration tests (needs Postgres + MinIO) ────────────────────────
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: outliner
+          POSTGRES_PASSWORD: outliner
+          POSTGRES_DB: outliner
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd="pg_isready -U outliner -d outliner"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+      minio:
+        image: minio/minio:latest
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        ports:
+          - "9000:9000"
+        options: >-
+          --health-cmd="mc ready local || exit 1"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: postgres://outliner:outliner@localhost:5432/outliner
+      S3_ENDPOINT: http://localhost:9000
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
+      S3_BUCKET: open-outliner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm migrate
+      - run: pnpm --filter @open-outliner/server test
+
+  # ── Client build (validates Vite production build) ─────────────────────
+  client-build:
+    name: Client Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @open-outliner/shared build
+      - run: pnpm --filter @open-outliner/crdt build
+      - run: pnpm --filter @open-outliner/client build
+
+  # ── Container build (validates Dockerfiles) ────────────────────────────
+  containers:
+    name: Container Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build app image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.app
+          push: false
+          tags: open-outliner/app:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Build web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.web
+          push: false
+          tags: open-outliner/web:ci
+          build-args: |
+            VITE_SYNC_URL=http://localhost:8788
+            VITE_API_BASE_URL=http://localhost:8787
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Full self-host smoke test (compose up → create → edit → health) ───
+  smoke:
+    name: Self-Host Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build images
+        run: |
+          docker compose build app web
+      - name: Start services
+        run: |
+          docker compose up -d
+          echo "Waiting for health..."
+          timeout 120 bash -c 'until docker compose exec app wget -qO- http://localhost:8787/health 2>/dev/null | grep -q ok; do sleep 2; done'
+      - name: Smoke - create document via API
+        run: |
+          # Signup
+          SIGNUP=$(curl -s -c /tmp/cookies.txt -b /tmp/cookies.txt -X POST http://localhost:8787/rpc \
+            -H 'Content-Type: application/json' \
+            -d '{"method":"Signup","params":{"email":"smoke@test.com","password":"password123"},"requestId":"smoke-1"}')
+          echo "Signup: $SIGNUP"
+          CSRF=$(echo "$SIGNUP" | jq -r '.result.csrfToken')
+          # Create document
+          CREATE=$(curl -s -c /tmp/cookies.txt -b /tmp/cookies.txt -X POST http://localhost:8787/rpc \
+            -H 'Content-Type: application/json' \
+            -H "X-CSRF-Token: $CSRF" \
+            -d '{"method":"CreateDocument","params":{"workspaceId":"__placeholder__","title":"Smoke Test"},"requestId":"smoke-2"}')
+          echo "CreateDocument: $CREATE"
+      - name: Smoke - health endpoint
+        run: |
+          HEALTH=$(curl -s http://localhost:8787/health)
+          echo "Health: $HEALTH"
+          echo "$HEALTH" | jq -e '.status == "ok"'
+      - name: Teardown
+        if: always()
+        run: docker compose down -v
