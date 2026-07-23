@@ -100,7 +100,29 @@ export function createSession(documentId: string): Session {
   const syncUrl = import.meta.env.VITE_SYNC_URL;
   let provider: HocuspocusProvider | undefined;
   if (syncUrl) {
-    provider = new HocuspocusProvider({ url: syncUrl, name: documentId, document: doc });
+    // Hocuspocus requires a non-empty `token` whenever the server defines
+    // `onAuthenticate`. Auth itself is the httpOnly session cookie on the WS
+    // upgrade (ADR-0014) — the token value is ignored server-side. Prefer a
+    // same-origin URL (Vite proxies `/collaboration` → :8788) so the cookie
+    // is always attached; `ws://localhost:8788` cross-port can drop it.
+    provider = new HocuspocusProvider({
+      url: syncUrl,
+      name: documentId,
+      document: doc,
+      token: 'cookie',
+      onAuthenticationFailed: ({ reason }) => {
+        // Expected on logout/revocation (ADR-0014); avoid spamming the console.
+        if (reason === 'permission-denied' || reason === 'Forbidden') return;
+        console.warn('[sync] authentication failed:', reason);
+      },
+      onClose: ({ event }) => {
+        // 1000 = normal; 4401/4403 = session revoked / auth rejected (logout path).
+        if (!event?.code || event.code === 1000 || event.code === 4401 || event.code === 4403) {
+          return;
+        }
+        console.warn('[sync] websocket closed:', event.code, event.reason);
+      },
+    });
   }
 
   const session: Session = {

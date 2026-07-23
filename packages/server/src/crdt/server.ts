@@ -1,10 +1,10 @@
 import { Hocuspocus } from '@hocuspocus/server';
 import { Database } from '@hocuspocus/extension-database';
-import { Forbidden, Unauthorized } from '@hocuspocus/common';
+import { Forbidden } from '@hocuspocus/common';
 import type { Db } from '../db/db.js';
 import { createYjsStore, type YjsStore } from './yjs-store.js';
 import { createProjector, type Projector } from './projector.js';
-import { resolveWsConnection, startAuthHeartbeat, WsAuthError } from './auth.js';
+import { resolveWsConnection, startAuthHeartbeat, } from './auth.js';
 import { createConnectionRegistry, type ConnectionRegistry } from './connections.js';
 import { createRateLimiter, type RateLimiter } from '../http/rate-limit.js';
 
@@ -90,10 +90,14 @@ export function createCollabServer(deps: CollabServerDeps): CollabServer {
         );
         return { userId, sessionId };
       } catch (err) {
-        log(
-          `WS auth rejected for ${data.documentName}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        throw err instanceof WsAuthError ? Forbidden : Unauthorized;
+        const message = err instanceof Error ? err.message : String(err);
+        log(`WS auth rejected for ${data.documentName}: ${message}`);
+        // Always Forbidden (4403) for authz failures. Throwing Unauthorized
+        // (4401) makes the provider print a misleading "token is required"
+        // warning even when a token was sent and the cookie/session was the
+        // real problem (ADR-0014 cookie auth; token is a Hocuspocus handshake
+        // formality).
+        throw Forbidden;
       }
     },
     async connected(data) {

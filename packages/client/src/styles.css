@@ -42,6 +42,27 @@ body {
   color: var(--muted);
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  flex: 1;
+}
+
+.logout-btn {
+  margin-left: auto;
+  font-size: 13px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.logout-btn:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+
+.logout-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .loading {

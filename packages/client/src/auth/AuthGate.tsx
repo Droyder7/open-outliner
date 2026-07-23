@@ -18,7 +18,7 @@ export interface AuthedUser {
 export function AuthGate({
   children,
 }: {
-  children: (user: AuthedUser) => JSX.Element;
+  children: (user: AuthedUser, logout: () => Promise<void>) => JSX.Element;
 }): JSX.Element {
   const [user, setUser] = useState<AuthedUser | null>(null);
   const [checking, setChecking] = useState(true);
@@ -46,6 +46,18 @@ export function AuthGate({
     };
   }, []);
 
+  async function logout(): Promise<void> {
+    try {
+      await rpc.call('Logout', {});
+    } catch {
+      // Session may already be gone; still clear local auth state.
+    }
+    setUser(null);
+    setEmail('');
+    setPassword('');
+    setError(null);
+  }
+
   async function submit(e: React.FormEvent): Promise<void> {
     e.preventDefault();
     setBusy(true);
@@ -66,7 +78,7 @@ export function AuthGate({
   }
 
   if (checking) return <div className="loading">Loading…</div>;
-  if (user) return children(user);
+  if (user) return children(user, logout);
 
   return (
     <div className="auth-gate">

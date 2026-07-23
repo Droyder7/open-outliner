@@ -45,7 +45,15 @@ export async function resolveWsConnection(
   // documentName is the Hocuspocus room name, which the client sets to the
   // document id (session.ts). Membership in the owning workspace gates the
   // connection (security-and-multitenancy.md: read authorization gates the
-  // connection).
+  // connection). Reject non-UUID room names before the SQL layer so a stray
+  // `?doc=smoke-test-1` becomes a clean Forbidden, not a 500 from Postgres.
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      params.documentName,
+    )
+  ) {
+    throw new WsAuthError('Document id is not a valid UUID');
+  }
   const allowed = await canAccessDocument(deps.db, params.documentName, resolved.userId);
   if (!allowed) throw new WsAuthError('Not a member of the workspace that owns this document');
 

@@ -36,5 +36,21 @@ export default defineConfig({
   ],
   server: {
     port: 5173,
+    // Dev: keep `/rpc` and the collab WebSocket same-origin so the httpOnly
+    // session cookie (set via the `/rpc` proxy) is always attached. Pointing
+    // the browser at `ws://localhost:8788` directly is host-same but can still
+    // lose the cookie on some browsers / private modes; a path proxy is the
+    // reliable dev setup. Override targets if the server isn't on defaults.
+    proxy: {
+      '/rpc': {
+        target: process.env.VITE_API_PROXY_TARGET ?? 'http://localhost:8787',
+        changeOrigin: true,
+      },
+      '/collaboration': {
+        target: process.env.VITE_WS_PROXY_TARGET ?? 'http://localhost:8788',
+        ws: true,
+        changeOrigin: true,
+      },
+    },
   },
 });
