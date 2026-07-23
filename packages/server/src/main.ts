@@ -23,7 +23,9 @@ async function main(): Promise<void> {
   log(`Applying migrations from ${config.migrationsDir} …`);
   const migrated = await migrate(db, config.migrationsDir);
   if (migrated.applied.length > 0) {
-    log(`Applied ${migrated.applied.length} migration(s): ${migrated.applied.map((m) => m.name).join(', ')}`);
+    log(
+      `Applied ${migrated.applied.length} migration(s): ${migrated.applied.map((m) => m.name).join(', ')}`,
+    );
   }
 
   const collab = createCollabServer({

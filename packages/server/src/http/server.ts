@@ -49,7 +49,11 @@ function clientIp(req: IncomingMessage): string {
   return req.socket.remoteAddress ?? 'unknown';
 }
 
-function applyCors(req: IncomingMessage, res: ServerResponse, corsOrigin: string | undefined): void {
+function applyCors(
+  req: IncomingMessage,
+  res: ServerResponse,
+  corsOrigin: string | undefined,
+): void {
   const origin = req.headers.origin;
   if (corsOrigin && origin === corsOrigin) {
     res.setHeader('Access-Control-Allow-Origin', corsOrigin);
@@ -70,7 +74,12 @@ export function createHttpServer(deps: HttpServerDeps): AppHttpServer {
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
       }
-      res.end(JSON.stringify({ ok: false, error: { code: 'internal', message: 'Internal server error' } }));
+      res.end(
+        JSON.stringify({
+          ok: false,
+          error: { code: 'internal', message: 'Internal server error' },
+        }),
+      );
     });
   });
 
@@ -101,7 +110,12 @@ export function createHttpServer(deps: HttpServerDeps): AppHttpServer {
       bodyText = await readBody(req);
     } catch {
       res.writeHead(413, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: false, error: { code: 'bad_request', message: 'Request body too large' } }));
+      res.end(
+        JSON.stringify({
+          ok: false,
+          error: { code: 'bad_request', message: 'Request body too large' },
+        }),
+      );
       return;
     }
 
@@ -110,11 +124,14 @@ export function createHttpServer(deps: HttpServerDeps): AppHttpServer {
       body = bodyText.length > 0 ? JSON.parse(bodyText) : {};
     } catch {
       res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: false, error: { code: 'bad_request', message: 'Malformed JSON' } }));
+      res.end(
+        JSON.stringify({ ok: false, error: { code: 'bad_request', message: 'Malformed JSON' } }),
+      );
       return;
     }
 
-    const method = typeof body === 'object' && body !== null ? (body as { method?: unknown }).method : undefined;
+    const method =
+      typeof body === 'object' && body !== null ? (body as { method?: unknown }).method : undefined;
 
     // CSRF: required for any authenticated, state-changing call. Public
     // (Signup/Login) and read-only methods are exempt — see rpc.ts.
@@ -126,9 +143,16 @@ export function createHttpServer(deps: HttpServerDeps): AppHttpServer {
     ) {
       const headerToken = req.headers['x-csrf-token'];
       const cookieToken = cookies[config.csrfCookieName];
-      if (!verifyCsrfToken(cookieToken, typeof headerToken === 'string' ? headerToken : undefined)) {
+      if (
+        !verifyCsrfToken(cookieToken, typeof headerToken === 'string' ? headerToken : undefined)
+      ) {
         res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, error: { code: 'forbidden', message: 'CSRF token missing or invalid' } }));
+        res.end(
+          JSON.stringify({
+            ok: false,
+            error: { code: 'forbidden', message: 'CSRF token missing or invalid' },
+          }),
+        );
         return;
       }
     }

@@ -174,7 +174,10 @@ export async function createDocumentWithRoot(
        VALUES ($1, $2, NULL, $3, 'bullet', '')`,
       [documentId, documentId, rootRank],
     );
-    await tx.query(`UPDATE documents SET root_item_id = $1 WHERE id = $2`, [documentId, documentId]);
+    await tx.query(`UPDATE documents SET root_item_id = $1 WHERE id = $2`, [
+      documentId,
+      documentId,
+    ]);
     await tx.query(
       `INSERT INTO document_projection (document_id, source_rev, projected_rev)
        VALUES ($1, 0, 0) ON CONFLICT (document_id) DO NOTHING`,

@@ -21,6 +21,20 @@ export class RpcClientError extends Error {
   }
 }
 
+/**
+ * The request never reached the server (offline, DNS/connection failure,
+ * CORS). Distinct from `RpcClientError`, which means the server *did*
+ * respond, just with a typed failure — the offline mutation outbox
+ * (`offline/outbox.ts`) only queues on this one, never on a real server
+ * rejection.
+ */
+export class RpcNetworkError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'Network error');
+    this.name = 'RpcNetworkError';
+  }
+}
+
 const CSRF_COOKIE_NAME = 'oo_csrf'; // must match ServerConfig.csrfCookieName default
 
 function readCookie(name: string): string | undefined {
@@ -55,10 +69,15 @@ export function createRpcClient(opts: RpcClientOptions = {}) {
         body: JSON.stringify({ method, params, requestId: crypto.randomUUID() }),
       });
     } catch (err) {
-      throw new RpcClientError('internal', err instanceof Error ? err.message : 'Network error');
+      throw new RpcNetworkError(err);
     }
 
-    const body = (await res.json()) as { ok: true; result: RpcResult[M] } | { ok: false; error: { code: RpcErrorCode; message: string; details?: Record<string, unknown> } };
+    const body = (await res.json()) as
+      | { ok: true; result: RpcResult[M] }
+      | {
+          ok: false;
+          error: { code: RpcErrorCode; message: string; details?: Record<string, unknown> };
+        };
     if (!body.ok) throw new RpcClientError(body.error.code, body.error.message, body.error.details);
     return body.result;
   }

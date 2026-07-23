@@ -7,7 +7,12 @@ import { randomBytes, scrypt as scryptCb, timingSafeEqual, type ScryptOptions } 
  * invalidating existing rows.
  */
 
-function scrypt(password: string, salt: Buffer, keylen: number, options: ScryptOptions): Promise<Buffer> {
+function scrypt(
+  password: string,
+  salt: Buffer,
+  keylen: number,
+  options: ScryptOptions,
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     scryptCb(password, salt, keylen, options, (err, derived) => {
       if (err) reject(err);
@@ -43,4 +48,3 @@ export async function verifyPassword(password: string, stored: string): Promise<
   const derived = await scrypt(password, salt, expected.length, { N: costN, r: costR, p: costP });
   return derived.length === expected.length && timingSafeEqual(derived, expected);
 }
-

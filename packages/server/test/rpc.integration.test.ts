@@ -38,11 +38,7 @@ describeDb('/rpc dispatch (API, Phase 6)', () => {
     };
   }
 
-  async function call<M extends RpcMethod>(
-    ctx: RpcContext,
-    method: M,
-    params: RpcParams[M],
-  ) {
+  async function call<M extends RpcMethod>(ctx: RpcContext, method: M, params: RpcParams[M]) {
     return dispatch({ method, params, requestId: crypto.randomUUID() }, ctx);
   }
 
@@ -147,7 +143,10 @@ describeDb('/rpc dispatch (API, Phase 6)', () => {
 
   it('CSRF-exempt read methods and forbidden cross-workspace access', async () => {
     const ownerEmail = `owner-${crypto.randomUUID()}@e.test`;
-    const owner = await call(freshCtx(null), 'Signup', { email: ownerEmail, password: 'hunter2hunter2' });
+    const owner = await call(freshCtx(null), 'Signup', {
+      email: ownerEmail,
+      password: 'hunter2hunter2',
+    });
     if (!owner.response.ok) throw new Error('signup failed');
     const ownerSessionId = owner.setCookies.find((c) => c.name === config.sessionCookieName)!.value;
     const ownerCtx = freshCtx({ userId: owner.response.result.userId, sessionId: ownerSessionId });
@@ -156,10 +155,18 @@ describeDb('/rpc dispatch (API, Phase 6)', () => {
     const workspaceId = ownerWho.response.result.workspaceIds[0]!;
 
     const strangerEmail = `stranger-${crypto.randomUUID()}@e.test`;
-    const stranger = await call(freshCtx(null), 'Signup', { email: strangerEmail, password: 'hunter2hunter2' });
+    const stranger = await call(freshCtx(null), 'Signup', {
+      email: strangerEmail,
+      password: 'hunter2hunter2',
+    });
     if (!stranger.response.ok) throw new Error('signup failed');
-    const strangerSessionId = stranger.setCookies.find((c) => c.name === config.sessionCookieName)!.value;
-    const strangerCtx = freshCtx({ userId: stranger.response.result.userId, sessionId: strangerSessionId });
+    const strangerSessionId = stranger.setCookies.find(
+      (c) => c.name === config.sessionCookieName,
+    )!.value;
+    const strangerCtx = freshCtx({
+      userId: stranger.response.result.userId,
+      sessionId: strangerSessionId,
+    });
 
     const forbidden = await call(strangerCtx, 'ListDocuments', { workspaceId });
     expect(forbidden.response.ok).toBe(false);
@@ -168,7 +175,10 @@ describeDb('/rpc dispatch (API, Phase 6)', () => {
 
   it('InviteMember + RemoveMember revoke the removed member session for immediate WS drop', async () => {
     const ownerEmail = `owner2-${crypto.randomUUID()}@e.test`;
-    const owner = await call(freshCtx(null), 'Signup', { email: ownerEmail, password: 'hunter2hunter2' });
+    const owner = await call(freshCtx(null), 'Signup', {
+      email: ownerEmail,
+      password: 'hunter2hunter2',
+    });
     if (!owner.response.ok) throw new Error('signup failed');
     const ownerSessionId = owner.setCookies.find((c) => c.name === config.sessionCookieName)!.value;
     const ownerCtx = freshCtx({ userId: owner.response.result.userId, sessionId: ownerSessionId });

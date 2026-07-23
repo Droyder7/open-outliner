@@ -49,13 +49,21 @@ function requireSession(ctx: RpcContext): { userId: string; sessionId: string } 
   return ctx.session;
 }
 
-async function requireWorkspaceMember(ctx: RpcContext, workspaceId: string, userId: string): Promise<void> {
+async function requireWorkspaceMember(
+  ctx: RpcContext,
+  workspaceId: string,
+  userId: string,
+): Promise<void> {
   if (!(await isWorkspaceMember(ctx.db, workspaceId, userId))) {
     throw new RpcHandlerError('forbidden', 'Not a member of this workspace');
   }
 }
 
-async function requireDocumentAccess(ctx: RpcContext, documentId: string, userId: string): Promise<void> {
+async function requireDocumentAccess(
+  ctx: RpcContext,
+  documentId: string,
+  userId: string,
+): Promise<void> {
   if (!(await canAccessDocument(ctx.db, documentId, userId))) {
     throw new RpcHandlerError('forbidden', 'Not a member of the workspace that owns this document');
   }
@@ -97,7 +105,10 @@ async function issueSession(ctx: RpcContext, userId: string): Promise<{ csrfToke
   return { csrfToken };
 }
 
-export type RpcHandler<M extends RpcMethod> = (params: RpcParams[M], ctx: RpcContext) => Promise<RpcResult[M]>;
+export type RpcHandler<M extends RpcMethod> = (
+  params: RpcParams[M],
+  ctx: RpcContext,
+) => Promise<RpcResult[M]>;
 
 export const handlers: { [M in RpcMethod]: RpcHandler<M> } = {
   async Signup(params, ctx) {
@@ -140,8 +151,16 @@ export const handlers: { [M in RpcMethod]: RpcHandler<M> } = {
       await revokeSession(ctx.db, ctx.session.sessionId);
       ctx.effects.revokedSessionIds.push(ctx.session.sessionId);
     }
-    ctx.effects.setCookies.push({ name: ctx.config.sessionCookieName, value: '', opts: { expiresNow: true } });
-    ctx.effects.setCookies.push({ name: ctx.config.csrfCookieName, value: '', opts: { expiresNow: true } });
+    ctx.effects.setCookies.push({
+      name: ctx.config.sessionCookieName,
+      value: '',
+      opts: { expiresNow: true },
+    });
+    ctx.effects.setCookies.push({
+      name: ctx.config.csrfCookieName,
+      value: '',
+      opts: { expiresNow: true },
+    });
     return {};
   },
 
@@ -170,7 +189,13 @@ export const handlers: { [M in RpcMethod]: RpcHandler<M> } = {
   async UpdateItem(params, ctx) {
     const { userId } = requireSession(ctx);
     await requireDocumentAccess(ctx, params.documentId, userId);
-    const updated = await updateItemMetadata(ctx.db, params.documentId, params.id, params.version, params.fields);
+    const updated = await updateItemMetadata(
+      ctx.db,
+      params.documentId,
+      params.id,
+      params.version,
+      params.fields,
+    );
     if (updated) return { item: toItemView(updated) };
     const current = await getItemById(ctx.db, params.documentId, params.id);
     if (!current) throw new RpcHandlerError('not_found', 'Item not found');
@@ -202,7 +227,7 @@ export const handlers: { [M in RpcMethod]: RpcHandler<M> } = {
     const { userId } = requireSession(ctx);
     await requireWorkspaceMember(ctx, params.workspaceId, userId);
     const email = params.email.trim().toLowerCase();
-    let invited = await findUserByEmail(ctx.db, email);
+    const invited = await findUserByEmail(ctx.db, email);
     let invitedUserId: string;
     if (invited) {
       invitedUserId = invited.id;

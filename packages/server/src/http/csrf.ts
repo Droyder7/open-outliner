@@ -15,7 +15,10 @@ export function generateCsrfToken(): string {
   return randomBytes(32).toString('hex');
 }
 
-export function verifyCsrfToken(cookieToken: string | undefined, headerToken: string | undefined): boolean {
+export function verifyCsrfToken(
+  cookieToken: string | undefined,
+  headerToken: string | undefined,
+): boolean {
   if (!cookieToken || !headerToken) return false;
   const a = Buffer.from(cookieToken);
   const b = Buffer.from(headerToken);

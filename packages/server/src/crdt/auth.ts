@@ -74,7 +74,9 @@ export function startAuthHeartbeat(
           const resolved = await resolveSession(db, sessionId);
           if (!resolved) registry.closeSession(sessionId);
         } catch (err) {
-          log(`auth heartbeat check failed for session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`);
+          log(
+            `auth heartbeat check failed for session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
       }
     })();

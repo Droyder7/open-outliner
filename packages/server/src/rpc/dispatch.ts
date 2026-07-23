@@ -28,17 +28,33 @@ export async function dispatch(body: unknown, ctx: RpcContext): Promise<Dispatch
   const effects = ctx.effects;
 
   if (typeof body !== 'object' || body === null) {
-    return { response: rpcErr('bad_request', 'Request body must be a JSON object'), setCookies: [], revokedSessionIds: [] };
+    return {
+      response: rpcErr('bad_request', 'Request body must be a JSON object'),
+      setCookies: [],
+      revokedSessionIds: [],
+    };
   }
   const { method, params, requestId } = body as Record<string, unknown>;
   if (!isRpcMethod(method)) {
-    return { response: rpcErr('bad_request', `Unknown method: ${String(method)}`), setCookies: [], revokedSessionIds: [] };
+    return {
+      response: rpcErr('bad_request', `Unknown method: ${String(method)}`),
+      setCookies: [],
+      revokedSessionIds: [],
+    };
   }
   if (typeof requestId !== 'string' || requestId.length === 0) {
-    return { response: rpcErr('bad_request', 'Missing requestId'), setCookies: [], revokedSessionIds: [] };
+    return {
+      response: rpcErr('bad_request', 'Missing requestId'),
+      setCookies: [],
+      revokedSessionIds: [],
+    };
   }
   if (!RPC_PUBLIC_METHODS.includes(method) && !ctx.session) {
-    return { response: rpcErr('unauthorized', 'Authentication required'), setCookies: [], revokedSessionIds: [] };
+    return {
+      response: rpcErr('unauthorized', 'Authentication required'),
+      setCookies: [],
+      revokedSessionIds: [],
+    };
   }
 
   try {
@@ -50,7 +66,11 @@ export async function dispatch(body: unknown, ctx: RpcContext): Promise<Dispatch
     // e.g. `handlers.WhoAmI(...)` would. Each handler's own signature (in
     // handlers.ts) is fully typed, so this cast doesn't hide a real mismatch.
     const response: RpcResponse = { ok: true, result: result as RpcResult[RpcMethod] };
-    return { response, setCookies: effects.setCookies, revokedSessionIds: effects.revokedSessionIds };
+    return {
+      response,
+      setCookies: effects.setCookies,
+      revokedSessionIds: effects.revokedSessionIds,
+    };
   } catch (err) {
     if (err instanceof RpcHandlerError) {
       return {

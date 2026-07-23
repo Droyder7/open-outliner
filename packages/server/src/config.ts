@@ -62,10 +62,7 @@ function defaultMigrationsDir(): string {
 export function loadConfig(): ServerConfig {
   const corsOrigin = process.env.CORS_ORIGIN || undefined;
   return {
-    databaseUrl: env(
-      'DATABASE_URL',
-      'postgres://outliner:outliner@localhost:5432/outliner',
-    ),
+    databaseUrl: env('DATABASE_URL', 'postgres://outliner:outliner@localhost:5432/outliner'),
     port: intEnv('PORT', 8787),
     wsPort: intEnv('WS_PORT', 8788),
     migrationsDir: env('MIGRATIONS_DIR', defaultMigrationsDir()),
@@ -76,7 +73,10 @@ export function loadConfig(): ServerConfig {
     authHeartbeatMs: intEnv('AUTH_HEARTBEAT_MS', 60_000),
     defaultDocDepth: intEnv('DEFAULT_DOC_DEPTH', 2),
     defaultChildrenDepth: intEnv('DEFAULT_CHILDREN_DEPTH', 1),
-    loginRateLimit: { limit: intEnv('LOGIN_RATE_LIMIT', 10), windowMs: intEnv('LOGIN_RATE_WINDOW_MS', 60_000) },
+    loginRateLimit: {
+      limit: intEnv('LOGIN_RATE_LIMIT', 10),
+      windowMs: intEnv('LOGIN_RATE_WINDOW_MS', 60_000),
+    },
     presignRateLimit: {
       limit: intEnv('PRESIGN_RATE_LIMIT', 30),
       windowMs: intEnv('PRESIGN_RATE_WINDOW_MS', 60_000),

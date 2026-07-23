@@ -49,14 +49,22 @@ describeDb('HTTP /rpc transport (API, Phase 6 + CSRF, Phase 5)', () => {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (cookieHeader) headers.cookie = cookieHeader;
     if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
-    const res = await fetch(`${baseUrl}/rpc`, { method: 'POST', headers, body: JSON.stringify(body) });
+    const res = await fetch(`${baseUrl}/rpc`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
     const json = await res.json();
     return { res, json };
   }
 
   it('Login sets an httpOnly session cookie and a readable CSRF cookie', async () => {
     const email = `http-${crypto.randomUUID()}@e.test`;
-    await rpc({ method: 'Signup', params: { email, password: 'hunter2hunter2' }, requestId: crypto.randomUUID() });
+    await rpc({
+      method: 'Signup',
+      params: { email, password: 'hunter2hunter2' },
+      requestId: crypto.randomUUID(),
+    });
     const { res, json } = await rpc({
       method: 'Login',
       params: { email, password: 'hunter2hunter2' },
@@ -83,7 +91,10 @@ describeDb('HTTP /rpc transport (API, Phase 6 + CSRF, Phase 5)', () => {
     // the double-submit check compares the cookie against that header.
     const cookieHeader = `${config.sessionCookieName}=${sessionCookie}; ${config.csrfCookieName}=${csrfToken}`;
 
-    const who = await rpc({ method: 'WhoAmI', params: {}, requestId: crypto.randomUUID() }, cookieHeader);
+    const who = await rpc(
+      { method: 'WhoAmI', params: {}, requestId: crypto.randomUUID() },
+      cookieHeader,
+    );
     const workspaceId = who.json.result.workspaceIds[0];
 
     const readWithoutCsrf = await rpc(
@@ -92,7 +103,11 @@ describeDb('HTTP /rpc transport (API, Phase 6 + CSRF, Phase 5)', () => {
     );
     // ListDocuments is a read method (CSRF-exempt) — use CreateDocument, a mutation, instead.
     const mutateWithoutCsrf = await rpc(
-      { method: 'CreateDocument', params: { workspaceId, title: 'No CSRF' }, requestId: crypto.randomUUID() },
+      {
+        method: 'CreateDocument',
+        params: { workspaceId, title: 'No CSRF' },
+        requestId: crypto.randomUUID(),
+      },
       cookieHeader,
     );
     expect(mutateWithoutCsrf.res.status).toBe(403);
@@ -100,7 +115,11 @@ describeDb('HTTP /rpc transport (API, Phase 6 + CSRF, Phase 5)', () => {
     expect(mutateWithoutCsrf.json.error.code).toBe('forbidden');
 
     const mutateWithCsrf = await rpc(
-      { method: 'CreateDocument', params: { workspaceId, title: 'With CSRF' }, requestId: crypto.randomUUID() },
+      {
+        method: 'CreateDocument',
+        params: { workspaceId, title: 'With CSRF' },
+        requestId: crypto.randomUUID(),
+      },
       cookieHeader,
       csrfToken,
     );
@@ -110,10 +129,18 @@ describeDb('HTTP /rpc transport (API, Phase 6 + CSRF, Phase 5)', () => {
 
   it('rate-limits repeated Login attempts', async () => {
     const email = `ratelimit-${crypto.randomUUID()}@e.test`;
-    await rpc({ method: 'Signup', params: { email, password: 'hunter2hunter2' }, requestId: crypto.randomUUID() });
+    await rpc({
+      method: 'Signup',
+      params: { email, password: 'hunter2hunter2' },
+      requestId: crypto.randomUUID(),
+    });
     const attempts = await Promise.all(
       Array.from({ length: config.loginRateLimit.limit + 5 }, () =>
-        rpc({ method: 'Login', params: { email, password: 'wrong' }, requestId: crypto.randomUUID() }),
+        rpc({
+          method: 'Login',
+          params: { email, password: 'wrong' },
+          requestId: crypto.randomUUID(),
+        }),
       ),
     );
     expect(attempts.some((a) => a.json.error?.code === 'rate_limited')).toBe(true);

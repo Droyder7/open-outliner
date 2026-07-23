@@ -57,7 +57,9 @@ export function createCollabServer(deps: CollabServerDeps): CollabServer {
   const store = createYjsStore(db, log);
   const projector = createProjector({ db, store, replicaId, log });
   const connections = createConnectionRegistry();
-  const connectLimiter = createRateLimiter(deps.connectRateLimit ?? { limit: 30, windowMs: 60_000 });
+  const connectLimiter = createRateLimiter(
+    deps.connectRateLimit ?? { limit: 30, windowMs: 60_000 },
+  );
 
   // Per-document debounce timers so a burst of updates yields one projection pass.
   const timers = new Map<string, NodeJS.Timeout>();
@@ -80,11 +82,17 @@ export function createCollabServer(deps: CollabServerDeps): CollabServer {
       try {
         const { userId, sessionId } = await resolveWsConnection(
           { db, sessionCookieName: deps.sessionCookieName, connectLimiter },
-          { documentName: data.documentName, requestHeaders: data.requestHeaders, ip: data.request.socket.remoteAddress ?? 'unknown' },
+          {
+            documentName: data.documentName,
+            requestHeaders: data.requestHeaders,
+            ip: data.request.socket.remoteAddress ?? 'unknown',
+          },
         );
         return { userId, sessionId };
       } catch (err) {
-        log(`WS auth rejected for ${data.documentName}: ${err instanceof Error ? err.message : String(err)}`);
+        log(
+          `WS auth rejected for ${data.documentName}: ${err instanceof Error ? err.message : String(err)}`,
+        );
         throw err instanceof WsAuthError ? Forbidden : Unauthorized;
       }
     },
@@ -121,4 +129,3 @@ export function createCollabServer(deps: CollabServerDeps): CollabServer {
     stopAuthHeartbeat: heartbeat.stop,
   };
 }
-

@@ -101,7 +101,8 @@ describeDb('Hocuspocus WS auth + revocation (SEC, Phase 5)', () => {
   it('connection registry: closeSession force-closes every socket for a session', () => {
     const registry = createConnectionRegistry();
     const closed: string[] = [];
-    const fakeConn = (id: string) => ({ close: () => closed.push(id) }) as unknown as import('@hocuspocus/server').Connection;
+    const fakeConn = (id: string) =>
+      ({ close: () => closed.push(id) }) as unknown as import('@hocuspocus/server').Connection;
 
     registry.register('socket-1', 'session-A', fakeConn('socket-1'));
     registry.register('socket-2', 'session-A', fakeConn('socket-2'));

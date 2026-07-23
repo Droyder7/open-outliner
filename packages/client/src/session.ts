@@ -2,6 +2,7 @@ import * as Y from 'yjs';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { createRoot, getRootId, getChildren, insertItem, type Actor } from '@open-outliner/crdt';
+import { setStorageStatus } from './offline/storage-status.js';
 
 /**
  * A client editing session for one document: the Y.Doc, its local IndexedDB
@@ -33,7 +34,10 @@ function getReplicaId(): string {
  * genuinely offline client still becomes usable (product principle #1):
  * no server round trip is required to type.
  */
-function waitForInitialSync(provider: HocuspocusProvider | undefined, timeoutMs = 4000): Promise<void> {
+function waitForInitialSync(
+  provider: HocuspocusProvider | undefined,
+  timeoutMs = 4000,
+): Promise<void> {
   if (!provider) return Promise.resolve();
   if (provider.synced) return Promise.resolve();
   return new Promise<void>((resolve) => {
@@ -44,6 +48,34 @@ function waitForInitialSync(provider: HocuspocusProvider | undefined, timeoutMs 
       resolve();
     };
     provider.on('synced', onSynced);
+  });
+}
+
+/**
+ * Wait for the local `y-indexeddb` store to load, but never hang or crash
+ * the app on it (offline-and-pwa.md "local corruption" / "failed IndexedDB
+ * transaction"): a store that fails to open or takes too long falls back to
+ * a fresh in-memory doc, surfaced via `storage-status` rather than silently
+ * swallowed. The in-memory Yjs doc keeps working regardless — only
+ * cross-reload durability is at risk.
+ */
+function waitForLocalPersistence(idb: IndexeddbPersistence, timeoutMs = 5000): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      setStorageStatus('memory-only');
+      resolve();
+    }, timeoutMs);
+    idb.whenSynced.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      () => {
+        clearTimeout(timer);
+        setStorageStatus('memory-only');
+        resolve();
+      },
+    );
   });
 }
 
@@ -76,15 +108,17 @@ export function createSession(documentId: string): Session {
     actor,
     documentId,
     rootId,
-    whenReady: Promise.all([idb.whenSynced, waitForInitialSync(provider)]).then(() => {
-      // Seed a root + first empty bullet once local AND (if configured) server
-      // state has loaded, so a brand-new document is immediately typeable
-      // without racing an existing server-seeded root (see waitForInitialSync).
-      if (!getRootId(doc)) createRoot(doc, rootId, actor);
-      if (getChildren(doc, rootId).length === 0) {
-        insertItem(doc, crypto.randomUUID(), rootId, undefined, actor);
-      }
-    }),
+    whenReady: Promise.all([waitForLocalPersistence(idb), waitForInitialSync(provider)]).then(
+      () => {
+        // Seed a root + first empty bullet once local AND (if configured) server
+        // state has loaded, so a brand-new document is immediately typeable
+        // without racing an existing server-seeded root (see waitForInitialSync).
+        if (!getRootId(doc)) createRoot(doc, rootId, actor);
+        if (getChildren(doc, rootId).length === 0) {
+          insertItem(doc, crypto.randomUUID(), rootId, undefined, actor);
+        }
+      },
+    ),
     destroy() {
       provider?.destroy();
       void idb.destroy();
@@ -93,4 +127,3 @@ export function createSession(documentId: string): Session {
   };
   return session;
 }
-

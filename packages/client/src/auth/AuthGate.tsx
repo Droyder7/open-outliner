@@ -15,7 +15,11 @@ export interface AuthedUser {
   workspaceIds: string[];
 }
 
-export function AuthGate({ children }: { children: (user: AuthedUser) => JSX.Element }): JSX.Element {
+export function AuthGate({
+  children,
+}: {
+  children: (user: AuthedUser) => JSX.Element;
+}): JSX.Element {
   const [user, setUser] = useState<AuthedUser | null>(null);
   const [checking, setChecking] = useState(true);
   const [mode, setMode] = useState<'login' | 'signup'>('login');
@@ -70,7 +74,13 @@ export function AuthGate({ children }: { children: (user: AuthedUser) => JSX.Ele
         <h2>{mode === 'login' ? 'Log in' : 'Create an account'}</h2>
         <label>
           Email
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            autoFocus
+          />
         </label>
         <label>
           Password
