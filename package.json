@@ -14,11 +14,13 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "build": "pnpm -r build",
-    "migrate": "pnpm --filter @open-outliner/server migrate"
+    "migrate": "pnpm --filter @open-outliner/server migrate",
+    "dev": "concurrently --names server,client --prefix-colors cyan,green \"pnpm --filter @open-outliner/server dev\" \"pnpm --filter @open-outliner/client dev\""
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.18.0",
     "@typescript-eslint/parser": "^8.18.0",
+    "concurrently": "^10.0.3",
     "eslint": "^8.57.1",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
