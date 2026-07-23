@@ -8,15 +8,19 @@ import { createRateLimiter, type RateLimiter } from './rate-limit.js';
 import { dispatch, isReadMethod } from '../rpc/dispatch.js';
 import type { RpcContext } from '../rpc/handlers.js';
 import { RPC_PUBLIC_METHODS } from '@open-outliner/shared';
+import type { S3Service } from '../storage/s3.js';
+import type { GcWorker } from '../jobs/gc.js';
+import { maxProjectionLag, maxCompactionLag } from '../jobs/compaction.js';
 
-const MAX_BODY_BYTES = 1_000_000; // 1MB — generous for a command/args payload, not a blob upload
+const MAX_BODY_BYTES = 5_000_000; // 5MB — large enough for ImportDocument JSON payloads
 
 export interface HttpServerDeps {
   db: Db;
   config: ServerConfig;
-  log?: (msg: string) => void;
-  /** Called with every session id revoked by this request (RemoveMember/Logout) so the caller can drop live Hocuspocus sockets (ADR-0014). */
-  onSessionsRevoked?: (sessionIds: string[]) => void;
+  s3?: S3Service | undefined;
+  gcWorker?: GcWorker | undefined;
+  log?: ((msg: string) => void) | undefined;
+  onSessionsRevoked?: ((sessionIds: string[]) => void) | undefined;
 }
 
 export interface AppHttpServer {
@@ -62,6 +66,33 @@ function applyCors(
   }
 }
 
+async function handleHealth(
+  db: Db,
+  gcWorker: GcWorker | undefined,
+  res: ServerResponse,
+): Promise<void> {
+  try {
+    await db.query('SELECT 1');
+    const projectionLag = await maxProjectionLag(db);
+    const compactionLag = await maxCompactionLag(db);
+    const gcBacklog = gcWorker ? await gcWorker.backlogCount() : 0;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        status: 'ok',
+        metrics: {
+          projectionLag,
+          compactionLag,
+          gcBacklog,
+        },
+      }),
+    );
+  } catch {
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'error', message: 'Database unreachable' }));
+  }
+}
+
 export function createHttpServer(deps: HttpServerDeps): AppHttpServer {
   const { db, config } = deps;
   const log = deps.log ?? (() => {});
@@ -70,7 +101,7 @@ export function createHttpServer(deps: HttpServerDeps): AppHttpServer {
 
   const server = createServer((req, res) => {
     void handle(req, res).catch((err) => {
-      log(`unhandled /rpc error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`unhandled request error: ${err instanceof Error ? err.message : String(err)}`);
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
       }
@@ -86,8 +117,13 @@ export function createHttpServer(deps: HttpServerDeps): AppHttpServer {
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     applyCors(req, res, config.corsOrigin);
 
+    if (req.method === 'GET' && req.url === '/health') {
+      await handleHealth(db, deps.gcWorker, res);
+      return;
+    }
+
     if (req.method === 'OPTIONS') {
-      res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Token');
       res.writeHead(204);
       res.end();
@@ -133,8 +169,6 @@ export function createHttpServer(deps: HttpServerDeps): AppHttpServer {
     const method =
       typeof body === 'object' && body !== null ? (body as { method?: unknown }).method : undefined;
 
-    // CSRF: required for any authenticated, state-changing call. Public
-    // (Signup/Login) and read-only methods are exempt — see rpc.ts.
     if (
       session &&
       typeof method === 'string' &&
@@ -161,6 +195,7 @@ export function createHttpServer(deps: HttpServerDeps): AppHttpServer {
     const ctx: RpcContext = {
       db,
       config,
+      s3: deps.s3,
       session,
       ip: clientIp(req),
       ...(typeof userAgentHeader === 'string' ? { userAgent: userAgentHeader } : {}),

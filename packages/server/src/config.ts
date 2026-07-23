@@ -4,31 +4,32 @@ import { randomUUID } from 'node:crypto';
 export interface ServerConfig {
   databaseUrl: string;
   port: number;
-  /** Port the Hocuspocus collaboration (WS) server listens on. */
   wsPort: number;
-  /** Directory holding the numbered .sql migrations (repo /migrations). */
   migrationsDir: string;
   sessionCookieName: string;
   csrfCookieName: string;
   sessionTtlMs: number;
-  /** Projection catch-up sweep interval (ADR-0013). */
   projectionSweepMs: number;
-  /** How often a live Hocuspocus connection re-resolves its session (ADR-0014). */
   authHeartbeatMs: number;
-  /** Default subtree depth for GetItems / GetChildren (load-on-expand). */
   defaultDocDepth: number;
   defaultChildrenDepth: number;
   loginRateLimit: { limit: number; windowMs: number };
   presignRateLimit: { limit: number; windowMs: number };
   connectRateLimit: { limit: number; windowMs: number };
-  /** This server process's Yjs replica id — the HLC tie-breaker stamped on cycle-repair writes (ADR-0009/0012). */
   replicaId: string;
-  /**
-   * Dev-only cross-origin allowance (e.g. the Vite dev server origin) so the
-   * client can call `/rpc` with credentials from a different port. Unset in
-   * self-host, where the app is served same-origin (OPS, Phase 12).
-   */
   corsOrigin?: string;
+  /** GC: interval between hard-delete passes (ms). Default: 60 000. */
+  gcIntervalMs: number;
+  /** GC: minimum age of deleted_at before a row may be hard-deleted (ms). Default: 7 days. */
+  gcRetentionMs: number;
+  /** Compaction: interval between sweep passes (ms). Default: 60 000. */
+  compactionIntervalMs: number;
+  /** S3 endpoint URL (e.g. http://localhost:9000). Set to enable attachment storage. */
+  s3Endpoint?: string;
+  s3Region?: string;
+  s3Bucket?: string;
+  s3AccessKeyId?: string;
+  s3SecretAccessKey?: string;
 }
 
 function env(name: string, fallback?: string): string {
@@ -61,6 +62,7 @@ function defaultMigrationsDir(): string {
 
 export function loadConfig(): ServerConfig {
   const corsOrigin = process.env.CORS_ORIGIN || undefined;
+  const s3Endpoint = process.env.S3_ENDPOINT || undefined;
   return {
     databaseUrl: env('DATABASE_URL', 'postgres://outliner:outliner@localhost:5432/outliner'),
     port: intEnv('PORT', 8787),
@@ -68,7 +70,7 @@ export function loadConfig(): ServerConfig {
     migrationsDir: env('MIGRATIONS_DIR', defaultMigrationsDir()),
     sessionCookieName: env('SESSION_COOKIE_NAME', 'oo_session'),
     csrfCookieName: env('CSRF_COOKIE_NAME', 'oo_csrf'),
-    sessionTtlMs: intEnv('SESSION_TTL_MS', 1000 * 60 * 60 * 24 * 30), // 30 days
+    sessionTtlMs: intEnv('SESSION_TTL_MS', 1000 * 60 * 60 * 24 * 30),
     projectionSweepMs: intEnv('PROJECTION_SWEEP_MS', 10_000),
     authHeartbeatMs: intEnv('AUTH_HEARTBEAT_MS', 60_000),
     defaultDocDepth: intEnv('DEFAULT_DOC_DEPTH', 2),
@@ -87,6 +89,18 @@ export function loadConfig(): ServerConfig {
     },
     replicaId: env('SERVER_REPLICA_ID', randomUUID()),
     ...(corsOrigin ? { corsOrigin } : {}),
+    gcIntervalMs: intEnv('GC_INTERVAL_MS', 60_000),
+    gcRetentionMs: intEnv('GC_RETENTION_MS', 7 * 24 * 60 * 60 * 1000),
+    compactionIntervalMs: intEnv('COMPACTION_INTERVAL_MS', 60_000),
+    ...(s3Endpoint
+      ? {
+          s3Endpoint,
+          s3Region: process.env.S3_REGION ?? 'us-east-1',
+          s3Bucket: process.env.S3_BUCKET ?? 'open-outliner',
+          s3AccessKeyId: process.env.S3_ACCESS_KEY_ID ?? '',
+          s3SecretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? '',
+        }
+      : {}),
   };
 }
 

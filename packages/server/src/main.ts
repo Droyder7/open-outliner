@@ -3,17 +3,14 @@ import { createDb } from './db/db.js';
 import { migrate } from './db/migrate.js';
 import { createCollabServer } from './crdt/server.js';
 import { createHttpServer } from './http/server.js';
+import { createS3Service } from './storage/s3.js';
+import { createCompactionWorker } from './jobs/compaction.js';
+import { createGcWorker } from './jobs/gc.js';
 
 /**
  * Process entrypoint: applies pending migrations, then brings up the two
- * network surfaces that make up the app server —
- *
- * - the `/rpc` HTTP API (Phase 6) on `config.port`
- * - the Hocuspocus collaboration WebSocket (Phase 3/5) on `config.wsPort`
- *
- * — sharing one `Db` pool and one connection registry so a session revoked
- * through `/rpc` (`Logout`/`RemoveMember`) drops its live Hocuspocus socket
- * immediately (ADR-0014), not just on the next heartbeat tick.
+ * network surfaces (HTTP /rpc + Hocuspocus WebSocket) plus background jobs
+ * (projection sweep, compaction, tombstone-aware GC).
  */
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -28,6 +25,26 @@ async function main(): Promise<void> {
     );
   }
 
+  // S3 service is optional — attachment RPCs return "not configured" when absent.
+  const s3 =
+    config.s3Endpoint && config.s3AccessKeyId && config.s3SecretAccessKey
+      ? createS3Service({
+          endpoint: config.s3Endpoint,
+          region: config.s3Region ?? 'us-east-1',
+          bucket: config.s3Bucket ?? 'open-outliner',
+          accessKeyId: config.s3AccessKeyId,
+          secretAccessKey: config.s3SecretAccessKey,
+        })
+      : undefined;
+  if (s3) log('S3 attachment storage enabled');
+
+  const gcWorker = createGcWorker(
+    db,
+    { retentionMs: config.gcRetentionMs, batchSize: 500 },
+    s3,
+  );
+  const compactionWorker = createCompactionWorker(db, { log });
+
   const collab = createCollabServer({
     db,
     replicaId: config.replicaId,
@@ -40,23 +57,46 @@ async function main(): Promise<void> {
   const http = createHttpServer({
     db,
     config,
+    s3,
+    gcWorker,
     log,
     onSessionsRevoked: (sessionIds) => {
       for (const sessionId of sessionIds) collab.connections.closeSession(sessionId);
     },
   });
 
-  // Catch-up sweep (ADR-0013): recovers any projection pass lost to a crash in
-  // the persist→debounce gap. Runs once at startup, then on an interval.
+  // Background jobs
+  const timers: NodeJS.Timeout[] = [];
+
+  // Projection sweep (ADR-0013).
   const sweepTimer = setInterval(() => {
     void collab.projector.sweep().catch((err) => {
       log(`projection sweep failed: ${err instanceof Error ? err.message : String(err)}`);
     });
   }, config.projectionSweepMs);
   sweepTimer.unref();
+  timers.push(sweepTimer);
   void collab.projector.sweep().catch((err) => {
     log(`initial projection sweep failed: ${err instanceof Error ? err.message : String(err)}`);
   });
+
+  // Compaction sweep (ADR-0015 / Phase 12).
+  const compactionTimer = setInterval(() => {
+    void compactionWorker.sweep().catch((err) => {
+      log(`compaction sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }, config.compactionIntervalMs);
+  compactionTimer.unref();
+  timers.push(compactionTimer);
+
+  // Tombstone-aware GC (ADR-0006 / Phase 9).
+  const gcTimer = setInterval(() => {
+    void gcWorker.run().catch((err) => {
+      log(`GC pass failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }, config.gcIntervalMs);
+  gcTimer.unref();
+  timers.push(gcTimer);
 
   await collab.hocuspocus.listen(config.wsPort);
   log(`Hocuspocus collaboration server listening on :${config.wsPort}`);
@@ -66,7 +106,7 @@ async function main(): Promise<void> {
 
   async function shutdown(signal: string): Promise<void> {
     log(`${signal} received, shutting down …`);
-    clearInterval(sweepTimer);
+    for (const t of timers) clearInterval(t);
     collab.stopAuthHeartbeat();
     await new Promise<void>((resolve) => http.server.close(() => resolve()));
     await collab.hocuspocus.destroy();

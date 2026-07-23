@@ -58,8 +58,12 @@ export const RPC_METHODS = [
   'InviteMember',
   'RemoveMember',
   'PresignUpload',
+  'FinalizeUpload',
   'PresignDownload',
   'WhoAmI',
+  'ExportDocument',
+  'ImportDocument',
+  'SearchItems',
 ] as const;
 export type RpcMethod = (typeof RPC_METHODS)[number];
 
@@ -99,9 +103,13 @@ export interface RpcParams {
   ListDocuments: { workspaceId: string };
   InviteMember: { workspaceId: string; email: string };
   RemoveMember: { workspaceId: string; userId: string };
-  PresignUpload: { documentId: string; mime: string; size: number };
-  PresignDownload: { attachmentId: string };
+  PresignUpload: { documentId: string; itemId?: string; mime: string; size: number };
+  FinalizeUpload: { attachmentId: string; documentId: string };
+  PresignDownload: { attachmentId: string; documentId: string };
   WhoAmI: Record<string, never>;
+  ExportDocument: { documentId: string; format: 'markdown' | 'json' };
+  ImportDocument: { workspaceId: string; title?: string; data: ExportedDocument };
+  SearchItems: { documentId: string; query: string };
 }
 
 /** Result per method. */
@@ -120,8 +128,42 @@ export interface RpcResult {
   InviteMember: { userId: string };
   RemoveMember: Record<string, never>;
   PresignUpload: { attachmentId: string; url: string; expiresInSec: number };
+  FinalizeUpload: { attachment: AttachmentView };
   PresignDownload: { url: string; expiresInSec: number };
   WhoAmI: { userId: string; workspaceIds: string[] };
+  ExportDocument: { content: string };
+  ImportDocument: { documentId: string; rootItemId: string };
+  SearchItems: { items: ItemView[] };
+}
+
+/** Attachment metadata as returned by RPC (no s3_key — server-internal). */
+export interface AttachmentView {
+  readonly id: string;
+  readonly documentId: string;
+  readonly itemId: string | null;
+  readonly mime: string;
+  readonly size: number;
+  readonly checksum: string;
+  readonly uploadedAt: string;
+}
+
+/** Exported item node (JSON full-fidelity format, ADR-0016). */
+export interface ExportedItem {
+  readonly id: string;
+  readonly parentId: string | null;
+  readonly rank: string;
+  readonly type: string;
+  readonly content: string;
+  readonly note: string | null;
+  readonly isCompleted: boolean;
+  readonly isCollapsed: boolean;
+}
+
+/** Top-level JSON export envelope (ADR-0016). */
+export interface ExportedDocument {
+  readonly version: 1;
+  readonly exportedAt: string;
+  readonly items: ExportedItem[];
 }
 
 export function isRpcMethod(value: unknown): value is RpcMethod {
@@ -143,6 +185,8 @@ export const RPC_READ_METHODS: readonly RpcMethod[] = [
   'GetChildren',
   'ListDocuments',
   'WhoAmI',
+  'ExportDocument',
+  'SearchItems',
 ];
 
 /**

@@ -1,7 +1,13 @@
-import type { ItemView, RpcMethod, RpcParams, RpcResult } from '@open-outliner/shared';
+import type {
+  AttachmentView,
+  ItemView,
+  RpcMethod,
+  RpcParams,
+  RpcResult,
+} from '@open-outliner/shared';
 import type { Db } from '../db/db.js';
 import type { ItemRow } from '../db/items-repo.js';
-import { getItemById, getSubtree, updateItemMetadata } from '../db/items-repo.js';
+import { getItemById, getSubtree, getLiveItems, updateItemMetadata } from '../db/items-repo.js';
 import {
   addMember,
   canAccessDocument,
@@ -14,6 +20,11 @@ import {
   listWorkspaceIdsForUser,
   removeMember,
 } from '../db/tenancy-repo.js';
+import {
+  createAttachment,
+  finalizeAttachment,
+  getAttachmentForDownload,
+} from '../db/attachments-repo.js';
 import { createSession, revokeSession } from '../db/sessions-repo.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { generateCsrfToken } from '../http/csrf.js';
@@ -21,25 +32,25 @@ import type { ServerConfig } from '../config.js';
 import { RpcHandlerError } from './errors.js';
 import type { CookieOptions } from '../http/cookies.js';
 import type { RateLimiter } from '../http/rate-limit.js';
+import type { S3Service } from '../storage/s3.js';
+import {
+  ALLOWED_MIME_TYPES,
+  MAX_ATTACHMENT_BYTES,
+  PUT_PRESIGN_TTL_SEC,
+  GET_PRESIGN_TTL_SEC,
+} from '../storage/s3.js';
+import { serializeMarkdown, serializeJson, importDocument } from '../export/serializer.js';
 
-/**
- * Everything a handler needs, and the side channel for effects the transport
- * layer must apply (cookies, connection revocation) that don't belong in the
- * typed `RpcResult` body. Keeping handlers pure functions of
- * `(params, ctx) => result` (throwing `RpcHandlerError` for typed failures)
- * is what makes `dispatch()` a single, uniform place to turn either into an
- * `RpcResponse` envelope.
- */
 export interface RpcContext {
   readonly db: Db;
   readonly config: ServerConfig;
+  readonly s3?: S3Service | undefined;
   readonly session: { userId: string; sessionId: string } | null;
   readonly ip: string;
   readonly userAgent?: string;
   readonly rateLimiters: { login: RateLimiter; presign: RateLimiter };
   readonly effects: {
     setCookies: { name: string; value: string; opts: CookieOptions }[];
-    /** Session ids just revoked — the caller drops their live Hocuspocus sockets (ADR-0014). */
     revokedSessionIds: string[];
   };
 }
@@ -47,6 +58,11 @@ export interface RpcContext {
 function requireSession(ctx: RpcContext): { userId: string; sessionId: string } {
   if (!ctx.session) throw new RpcHandlerError('unauthorized', 'No active session');
   return ctx.session;
+}
+
+function requireS3(ctx: RpcContext): S3Service {
+  if (!ctx.s3) throw new RpcHandlerError('internal', 'Attachment storage is not configured');
+  return ctx.s3;
 }
 
 async function requireWorkspaceMember(
@@ -84,7 +100,6 @@ function toItemView(row: ItemRow): ItemView {
   };
 }
 
-/** Issue a fresh session + CSRF cookie pair for `userId` and queue them as effects. */
 async function issueSession(ctx: RpcContext, userId: string): Promise<{ csrfToken: string }> {
   const sessionId = await createSession(ctx.db, userId, ctx.config.sessionTtlMs, {
     ...(ctx.userAgent !== undefined ? { userAgent: ctx.userAgent } : {}),
@@ -136,8 +151,6 @@ export const handlers: { [M in RpcMethod]: RpcHandler<M> } = {
     }
     const email = params.email.trim().toLowerCase();
     const user = await findUserByEmail(ctx.db, email);
-    // Constant-shape failure: verify against a dummy hash when the user is
-    // absent so the response timing doesn't reveal account existence.
     const ok = user?.password_hash
       ? await verifyPassword(params.password, user.password_hash)
       : await verifyPassword(params.password, await hashPassword('dummy-password-for-timing'));
@@ -232,9 +245,6 @@ export const handlers: { [M in RpcMethod]: RpcHandler<M> } = {
     if (invited) {
       invitedUserId = invited.id;
     } else {
-      // Invited-but-not-yet-activated: created with no password; login is
-      // impossible until the user sets one (out of scope here — signup flow
-      // owns activation).
       invitedUserId = await createUser(ctx.db, email, null, null);
     }
     await addMember(ctx.db, params.workspaceId, invitedUserId);
@@ -251,21 +261,140 @@ export const handlers: { [M in RpcMethod]: RpcHandler<M> } = {
     return {};
   },
 
-  async PresignUpload(_params, ctx) {
+  async PresignUpload(params, ctx) {
     const { userId } = requireSession(ctx);
     if (!ctx.rateLimiters.presign.check(userId)) {
       throw new RpcHandlerError('rate_limited', 'Too many presign requests, try again later');
     }
-    // Attachments (S3/MinIO presign, checksum finalize) are Phase 8 (ATT) —
-    // out of scope for Phases 5-7 per implementation-build-order-plan.md.
-    throw new RpcHandlerError('internal', 'Attachments are not yet implemented (Phase 8 / ATT)');
+    const s3 = requireS3(ctx);
+    await requireDocumentAccess(ctx, params.documentId, userId);
+
+    if (!(ALLOWED_MIME_TYPES as readonly string[]).includes(params.mime)) {
+      throw new RpcHandlerError('bad_request', `MIME type not allowed: ${params.mime}`);
+    }
+    if (params.size <= 0 || params.size > MAX_ATTACHMENT_BYTES) {
+      throw new RpcHandlerError(
+        'bad_request',
+        `File size must be between 1 byte and ${MAX_ATTACHMENT_BYTES} bytes`,
+      );
+    }
+
+    const attachmentId = await createAttachment(
+      ctx.db,
+      params.documentId,
+      params.itemId ?? null,
+      params.mime,
+      params.size,
+    );
+    const s3Key = s3.s3Key(params.documentId, attachmentId);
+    const url = await s3.presignPut(s3Key, params.mime, params.size);
+
+    return { attachmentId, url, expiresInSec: PUT_PRESIGN_TTL_SEC };
   },
 
-  async PresignDownload(_params, ctx) {
+  async FinalizeUpload(params, ctx) {
+    const { userId } = requireSession(ctx);
+    const s3 = requireS3(ctx);
+    await requireDocumentAccess(ctx, params.documentId, userId);
+
+    const s3Key = s3.s3Key(params.documentId, params.attachmentId);
+    const head = await s3.headObject(s3Key);
+    if (!head) {
+      throw new RpcHandlerError('not_found', 'Upload not found in storage — upload first');
+    }
+
+    const checksum = head.etag;
+    const row = await finalizeAttachment(
+      ctx.db,
+      params.attachmentId,
+      params.documentId,
+      s3Key,
+      head.size,
+      checksum,
+    );
+    if (!row) {
+      throw new RpcHandlerError(
+        'not_found',
+        'Attachment not found, already finalized, or deleted',
+      );
+    }
+
+    const view: AttachmentView = {
+      id: row.id,
+      documentId: row.document_id,
+      itemId: row.item_id,
+      mime: row.mime,
+      size: Number(row.size),
+      checksum: row.checksum,
+      uploadedAt: row.uploaded_at!.toISOString(),
+    };
+    return { attachment: view };
+  },
+
+  async PresignDownload(params, ctx) {
     const { userId } = requireSession(ctx);
     if (!ctx.rateLimiters.presign.check(userId)) {
       throw new RpcHandlerError('rate_limited', 'Too many presign requests, try again later');
     }
-    throw new RpcHandlerError('internal', 'Attachments are not yet implemented (Phase 8 / ATT)');
+    const s3 = requireS3(ctx);
+    await requireDocumentAccess(ctx, params.documentId, userId);
+
+    const row = await getAttachmentForDownload(ctx.db, params.attachmentId, params.documentId);
+    if (!row || !row.s3_key) {
+      throw new RpcHandlerError('not_found', 'Attachment not found or not yet uploaded');
+    }
+
+    const url = await s3.presignGet(row.s3_key);
+    return { url, expiresInSec: GET_PRESIGN_TTL_SEC };
+  },
+
+  async ExportDocument(params, ctx) {
+    const { userId } = requireSession(ctx);
+    await requireDocumentAccess(ctx, params.documentId, userId);
+
+    const rows = await getLiveItems(ctx.db, params.documentId);
+    const content =
+      params.format === 'markdown'
+        ? serializeMarkdown(rows)
+        : serializeJson(params.documentId, rows);
+    return { content };
+  },
+
+  async ImportDocument(params, ctx) {
+    const { userId } = requireSession(ctx);
+    await requireWorkspaceMember(ctx, params.workspaceId, userId);
+
+    if (
+      !params.data ||
+      typeof params.data !== 'object' ||
+      params.data.version !== 1 ||
+      !Array.isArray(params.data.items)
+    ) {
+      throw new RpcHandlerError('bad_request', 'Invalid export data: expected version 1 JSON');
+    }
+
+    const { documentId, rootItemId } = await importDocument(
+      ctx.db,
+      params.workspaceId,
+      params.title ?? 'Imported Document',
+      params.data,
+    );
+    return { documentId, rootItemId };
+  },
+
+  async SearchItems(params, ctx) {
+    const { userId } = requireSession(ctx);
+    await requireDocumentAccess(ctx, params.documentId, userId);
+
+    const query = params.query.trim().toLowerCase();
+    if (query.length === 0) return { items: [] };
+
+    const rows = await getLiveItems(ctx.db, params.documentId);
+    const matched = rows.filter(
+      (r) =>
+        r.content.toLowerCase().includes(query) ||
+        (r.note !== null && r.note.toLowerCase().includes(query)),
+    );
+    return { items: matched.map(toItemView) };
   },
 };
