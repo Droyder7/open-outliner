@@ -9,7 +9,7 @@ import {
   buildDelete,
   buildUndelete,
 } from '@open-outliner/shared';
-import { writeMove, writeContent, writeDeleted, readDeleted, readMove, itemsMap } from '@open-outliner/crdt';
+import { writeMove, writeContent, writeDeleted, readDeleted, itemsMap } from '@open-outliner/crdt';
 import { createDb, type Db } from '../src/db/db.js';
 import { migrate } from '../src/db/migrate.js';
 import { loadConfig } from '../src/config.js';
@@ -228,6 +228,13 @@ describeDb('GC key removal — hard-delete sticks (ADR-0006/0019)', () => {
       // LIVE. On reconnect its update merges into the store and re-creates the
       // key that GC removed (ADR-0019 accepted edge).
       const stale = headlessClient(store, documentId);
+      // The merge of the stale replica's re-sent `set` against the GC's map
+      // `delete` is LWW by Yjs (clientId, clock). Pin the replica's client id
+      // above the uint32 space of randomly-minted ids so its write is always
+      // the later op and the re-created key is deterministic (the GC author's
+      // id is random.uint32, strictly < 2^32). Without this the test outcome
+      // depended on which random client id won.
+      stale.doc.clientID = 2 ** 32;
       writeMove(
         stale.doc,
         childId,
@@ -238,32 +245,6 @@ describeDb('GC key removal — hard-delete sticks (ADR-0006/0019)', () => {
       );
       writeContent(stale.doc, childId, 'still here');
       await stale.sync();
-
-      // TEMP DIAGNOSTIC — remove after CI ground truth is read.
-      {
-        const probe = await store.loadDocument(documentId);
-        const keys = [...itemsMap(probe).keys()];
-        const upd = await db.query<{ n: string }>(
-          `SELECT count(*)::text AS n FROM yjs_updates WHERE document_id = $1`,
-          [documentId],
-        );
-        const lens = await db.query<{ id: string; len: string }>(
-          `SELECT id, length(update)::text AS len FROM yjs_updates WHERE document_id = $1 ORDER BY id`,
-          [documentId],
-        );
-        console.log(
-          `PROBE rootId=${rootId} childId=${childId} updates=${upd.rows[0]!.n} lens=${JSON.stringify(
-            lens.rows.map((r) => `${r.id}:${r.len}`),
-          )} keys=${JSON.stringify(keys)}`,
-        );
-        if (itemsMap(probe).has(childId)) {
-          const node = itemsMap(probe).get(childId)!;
-          console.log(
-            `PROBE child deleted=${readDeleted(node).isDeleted} move=${JSON.stringify(readMove(node))}`,
-          );
-        }
-        probe.destroy();
-      }
 
       await expect(projector.projectDocument(documentId)).resolves.toBe(true);
       const remaining = await itemIds(documentId);

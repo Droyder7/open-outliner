@@ -123,7 +123,7 @@ describeDb('QA gate: concurrent-edit convergence', () => {
       const rank = rankAfter(prevRankA);
       itemsA.push(id);
       clientA.doc.transact(() => {
-        writeMove(clientA.doc, id, documentId, {
+        writeMove(clientA.doc, id, {
           parentId: documentId,
           rank,
           hlc: { wallMs: now(), counter: i, replicaId: replicaA },
@@ -141,7 +141,7 @@ describeDb('QA gate: concurrent-edit convergence', () => {
       const rank = rankAfter(prevRankB);
       itemsB.push(id);
       clientB.doc.transact(() => {
-        writeMove(clientB.doc, id, documentId, {
+        writeMove(clientB.doc, id, {
           parentId: documentId,
           rank,
           hlc: { wallMs: now(), counter: i, replicaId: replicaB },
@@ -194,12 +194,12 @@ describeDb('QA gate: concurrent-edit convergence', () => {
     const idA = randomUUID();
     const idB = randomUUID();
     clientA.doc.transact(() => {
-      writeMove(clientA.doc, idA, documentId, {
+      writeMove(clientA.doc, idA, {
         parentId: documentId,
         rank: 'a1',
         hlc: { wallMs: now(), counter: 1, replicaId: replicaA },
       });
-      writeMove(clientA.doc, idB, documentId, {
+      writeMove(clientA.doc, idB, {
         parentId: documentId,
         rank: 'a2',
         hlc: { wallMs: now(), counter: 2, replicaId: replicaA },
@@ -210,12 +210,12 @@ describeDb('QA gate: concurrent-edit convergence', () => {
     // Now create a cycle: make A a child of B, then B a child of A
     // These must be in separate HLCs so one wins
     clientA.doc.transact(() => {
-      writeMove(clientA.doc, idA, documentId, {
+      writeMove(clientA.doc, idA, {
         parentId: idB,
         rank: 'b0',
         hlc: { wallMs: now(), counter: 3, replicaId: replicaA },
       });
-      writeMove(clientA.doc, idB, documentId, {
+      writeMove(clientA.doc, idB, {
         parentId: idA,
         rank: 'b0',
         hlc: { wallMs: now(), counter: 4, replicaId: replicaA },

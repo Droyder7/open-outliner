@@ -81,7 +81,7 @@ describeDb('QA gate: export round-trip (ADR-0016)', () => {
     );
     await db.query(
       `INSERT INTO document_projection (document_id, source_rev, projected_rev) VALUES ($1, 0, 0)`,
-      [documentId, documentId],
+      [documentId],
     );
   });
 
@@ -104,7 +104,7 @@ describeDb('QA gate: export round-trip (ADR-0016)', () => {
         { id: idB1, parentId: idB, rank: 'a1', content: 'Item B1' },
       ];
       for (const item of items) {
-        writeMove(client.doc, item.id, documentId, {
+        writeMove(client.doc, item.id, {
           parentId: item.parentId,
           rank: item.rank,
           hlc: { wallMs: now(), counter: 0, replicaId },
@@ -171,7 +171,7 @@ describeDb('QA gate: export round-trip (ADR-0016)', () => {
     const client = headlessClient(store, documentId);
 
     client.doc.transact(() => {
-      writeMove(client.doc, randomUUID(), documentId, {
+      writeMove(client.doc, randomUUID(), {
         parentId: documentId,
         rank: 'a1',
         hlc: { wallMs: now(), counter: 0, replicaId },

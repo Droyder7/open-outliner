@@ -158,12 +158,21 @@ jobs:
             -d '{"method":"Signup","params":{"email":"smoke@test.com","password":"password123"},"requestId":"smoke-1"}')
           echo "Signup: $SIGNUP"
           CSRF=$(echo "$SIGNUP" | jq -r '.result.csrfToken')
+          # Signup auto-creates a personal workspace; resolve its real id via
+          # WhoAmI instead of guessing (CreateDocument requires membership).
+          WHOAMI=$(curl -s -c /tmp/cookies.txt -b /tmp/cookies.txt -X POST http://localhost:8787/rpc \
+            -H 'Content-Type: application/json' \
+            -H "X-CSRF-Token: $CSRF" \
+            -d '{"method":"WhoAmI","params":{},"requestId":"smoke-2"}')
+          WORKSPACE_ID=$(echo "$WHOAMI" | jq -r '.result.workspaceIds[0]')
+          echo "WhoAmI: $WHOAMI"
           # Create document
           CREATE=$(curl -s -c /tmp/cookies.txt -b /tmp/cookies.txt -X POST http://localhost:8787/rpc \
             -H 'Content-Type: application/json' \
             -H "X-CSRF-Token: $CSRF" \
-            -d '{"method":"CreateDocument","params":{"workspaceId":"__placeholder__","title":"Smoke Test"},"requestId":"smoke-2"}')
+            -d "{\"method\":\"CreateDocument\",\"params\":{\"workspaceId\":\"$WORKSPACE_ID\",\"title\":\"Smoke Test\"},\"requestId\":\"smoke-3\"}")
           echo "CreateDocument: $CREATE"
+          echo "$CREATE" | jq -e '.result.documentId' > /dev/null
       - name: Smoke - health endpoint
         run: |
           HEALTH=$(curl -s http://localhost:8787/health)

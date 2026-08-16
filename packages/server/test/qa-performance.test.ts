@@ -98,7 +98,7 @@ describeDb(`QA gate: ${ITEM_COUNT}-item move responsiveness`, () => {
       const id = randomUUID();
       const rank = rankAfter(prevRank);
       client.doc.transact(() => {
-        writeMove(client.doc, id, documentId, {
+        writeMove(client.doc, id, {
           parentId: documentId,
           rank,
           hlc: { wallMs: now(), counter: i, replicaId },
@@ -125,7 +125,7 @@ describeDb(`QA gate: ${ITEM_COUNT}-item move responsiveness`, () => {
     const newRank = rankBetween(null, firstItem.rank);
     const start = performance.now();
     client.doc.transact(() => {
-      writeMove(client.doc, lastItem.id, documentId, {
+      writeMove(client.doc, lastItem.id, {
         parentId: documentId,
         rank: newRank,
         hlc: { wallMs: now(), counter: 0, replicaId },

@@ -33,6 +33,7 @@ COPY packages/client/tsconfig.json packages/client/
 COPY packages/client/index.html packages/client/
 COPY packages/client/vite.config.ts packages/client/
 COPY packages/client/src packages/client/src/
+COPY tsconfig.base.json ./
 RUN pnpm --filter @open-outliner/shared build && \
     pnpm --filter @open-outliner/crdt build && \
     pnpm --filter @open-outliner/client build
