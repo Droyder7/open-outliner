@@ -3,7 +3,7 @@ import type { CycleRepair } from '@open-outliner/shared';
 import { MOVE_KEY, HLC_KEY, NODE_KEY } from '@open-outliner/shared';
 import type { Db, TxClient } from '../db/db.js';
 import { withDocumentLock } from '../db/db.js';
-import { upsertProjectedItem, getAllItemRows, type ProjectedItem } from '../db/items-repo.js';
+import { upsertProjectedItemsBatch, getAllItemRows, type ProjectedItem } from '../db/items-repo.js';
 import type { YjsStore } from './yjs-store.js';
 import { readAllSnapshots, itemsMap } from '@open-outliner/crdt';
 import { projectSnapshots } from './materialize.js';
@@ -128,31 +128,33 @@ export function createProjector(deps: ProjectorDeps): Projector {
         const { rows } = projectSnapshots(snapshots, now(), replicaId);
         const projectedIds = new Set(rows.map((r) => r.id));
 
-        // Upsert in topological order (each row after its parent) so the
-        // same-document parent FK is always satisfied. Roots (parent null) first.
-        for (const row of topologicalOrder(rows)) {
-          // Stale-replica guard (ADR-0019): a child whose parent key was removed
-          // by GC while this replica was offline re-appears in the merged CRDT on
-          // reconnect with a dangling parentId. Upserting it would trip the
-          // same-document parent FK and brick the whole pass, so skip it — it
-          // re-projects if the parent ever reappears (e.g. a later undo
-          // re-creates the key).
-          if (row.parentId !== null && !projectedIds.has(row.parentId)) continue;
-          await upsertProjectedItem(tx, documentId, row);
-        }
+        // Stale-replica guard (ADR-0019): a child whose parent key was removed
+        // by GC while this replica was offline re-appears in the merged CRDT on
+        // reconnect with a dangling parentId. Upserting it would trip the
+        // same-document parent FK and brick the whole pass, so skip it — it
+        // re-projects if the parent ever reappears (e.g. a later undo
+        // re-creates the key).
+        const projectable = topologicalOrder(rows).filter(
+          (row) => row.parentId === null || projectedIds.has(row.parentId),
+        );
+        // One batched upsert (the 10k-item QA gate) instead of n round-trips.
+        // Postgres checks the same-document parent FK at statement end, so
+        // parents and children in the same batch satisfy it.
+        await upsertProjectedItemsBatch(tx, documentId, projectable);
 
         // Tombstone rows present in items but absent from the merged CRDT: mark
         // deleted (never a raw DELETE — GC hard-deletes bottom-up later, ADR-0006).
         const present = new Set(rows.map((r) => r.id));
         const existing = await getAllItemRows(tx, documentId);
-        for (const e of existing) {
-          if (!present.has(e.id) && e.deleted_at === null) {
-            await tx.query(
-              `UPDATE items SET deleted_at = now(), version = version + 1, updated_at = now()
-                WHERE id = $1 AND document_id = $2`,
-              [e.id, documentId],
-            );
-          }
+        const missing = existing
+          .filter((e) => !present.has(e.id) && e.deleted_at === null)
+          .map((e) => e.id);
+        if (missing.length > 0) {
+          await tx.query(
+            `UPDATE items SET deleted_at = now(), version = version + 1, updated_at = now()
+              WHERE document_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL`,
+            [documentId, missing],
+          );
         }
 
         // Advance projected_rev in the SAME transaction as the upserts.

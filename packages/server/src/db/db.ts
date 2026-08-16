@@ -2,7 +2,17 @@ import pg from 'pg';
 
 const { Pool } = pg;
 
-export type QueryParam = string | number | boolean | null | Date | Buffer | Uint8Array;
+export type QueryParam =
+  | string
+  | number
+  | boolean
+  | null
+  | Date
+  | Buffer
+  | Uint8Array
+  // node-postgres natively serializes JS arrays as Postgres array literals;
+  // the batch materializer passes e.g. `$1::uuid[]` params this way.
+  | readonly unknown[];
 
 export interface Db {
   /** Run a parameterized query. Never string-concatenate SQL. */
