@@ -53,4 +53,4 @@ COPY --from=build /app/node_modules node_modules/
 COPY --from=build /app/migrations migrations/
 
 EXPOSE 8787 8788
-CMD ["node", "--env-file=.env", "packages/server/dist/main.js"]
+CMD ["node", "--env-file-if-exists=.env", "packages/server/dist/main.js"]

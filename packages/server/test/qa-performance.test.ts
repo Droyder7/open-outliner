@@ -18,7 +18,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import * as Y from 'yjs';
-import { rankBetween, rankAfter } from '@open-outliner/shared';
+import { rankBetween, rankAfter, ROOT_PARENT_SENTINEL } from '@open-outliner/shared';
 import { createDb, type Db } from '../src/db/db.js';
 import { migrate } from '../src/db/migrate.js';
 import { getLiveItems } from '../src/db/items-repo.js';
@@ -90,6 +90,18 @@ describeDb(`QA gate: ${ITEM_COUNT}-item move responsiveness`, () => {
       `INSERT INTO document_projection (document_id, source_rev, projected_rev) VALUES ($1, 0, 0)`,
       [documentId],
     );
+    // Author the synthetic root into the CRDT (id = documentId, parent = the
+    // sentinel) and sync it, as a real client does on first open. The
+    // projector skips any row whose parent is absent from the CRDT, so the
+    // 10k children keyed to the root need the root present there.
+    const rootClient = headlessClient(store, documentId);
+    writeMove(rootClient.doc, documentId, {
+      parentId: ROOT_PARENT_SENTINEL,
+      rank: 'a0',
+      hlc: { wallMs: now(), counter: 0, replicaId: 'root-seed' },
+    });
+    await rootClient.sync();
+    rootClient.destroy();
 
     // Seed 10,000 items under the root
     const client = headlessClient(store, documentId);

@@ -30,6 +30,7 @@ import {
   buildInsertMove,
   buildMove,
   buildDelete,
+  ROOT_PARENT_SENTINEL,
 } from '@open-outliner/shared';
 import { createDb, type Db } from '../src/db/db.js';
 import { migrate } from '../src/db/migrate.js';
@@ -103,6 +104,19 @@ describeDb('QA gate: concurrent-edit convergence', () => {
       `INSERT INTO document_projection (document_id, source_rev, projected_rev) VALUES ($1, 0, 0)`,
       [documentId],
     );
+    // Author the synthetic root into the CRDT (id = documentId, parent = the
+    // sentinel) and sync it, as a real client does on first open
+    // (createDocumentWithRoot's comment explains the id reuse). The projector
+    // skips any row whose parent is absent from the CRDT, so children keyed to
+    // the root need the root present there to be projected at all.
+    const rootClient = headlessClient(store, documentId);
+    writeMove(rootClient.doc, documentId, {
+      parentId: ROOT_PARENT_SENTINEL,
+      rank: 'a0',
+      hlc: { wallMs: now(), counter: 0, replicaId: 'root-seed' },
+    });
+    await rootClient.sync();
+    rootClient.destroy();
   });
 
   it('N=100 items per client, 50 moves, converges without torn move or cycle', async () => {
@@ -168,8 +182,10 @@ describeDb('QA gate: concurrent-edit convergence', () => {
     const liveItems = rows.filter((r) => r.id !== documentId); // exclude root
     expect(liveItems.length).toBe(200);
 
-    // Verify: every item has a valid parent (root or another live item)
-    const ids = new Set(liveItems.map((r) => r.id));
+    // Verify: every item has a valid parent (root or another live item). The
+    // root is seeded as a row, not part of the CRDT child set, so include it
+    // in the parent universe explicitly.
+    const ids = new Set([documentId, ...liveItems.map((r) => r.id)]);
     for (const item of liveItems) {
       if (item.parent_id !== null) {
         expect(ids.has(item.parent_id)).toBe(true);
