@@ -11,7 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: "20"
+  # pnpm 11 requires Node >= 22.13 (it uses the node:sqlite builtin, absent in Node 20).
+  NODE_VERSION: "22"
   PNPM_VERSION: "11.15.1"
 
 jobs:
@@ -53,18 +54,6 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
-      minio:
-        image: minio/minio:latest
-        env:
-          MINIO_ROOT_USER: minioadmin
-          MINIO_ROOT_PASSWORD: minioadmin
-        ports:
-          - "9000:9000"
-        options: >-
-          --health-cmd="mc ready local || exit 1"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=10
     env:
       DATABASE_URL: postgres://outliner:outliner@localhost:5432/outliner
       S3_ENDPOINT: http://localhost:9000
@@ -82,6 +71,18 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm migrate
+      # MinIO is started as a step, not a service container: the minio/minio
+      # image has CMD ["minio"] (no default `server /data`), so a service
+      # container would print help and exit before the health check can pass.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:latest server /data
+          echo "Waiting for MinIO..."
+          timeout 120 bash -c 'until curl -sf http://localhost:9000/minio/health/live > /dev/null; do sleep 1; done'
       - run: pnpm --filter @open-outliner/server test
 
   # ── Client build (validates Vite production build) ─────────────────────

@@ -5,7 +5,7 @@
   "description": "Offline-first collaborative outliner (Workflowy-parity) on Yjs + PostgreSQL.",
   "packageManager": "pnpm@11.15.1",
   "engines": {
-    "node": ">=18"
+    "node": ">=22.13"
   },
   "scripts": {
     "typecheck": "pnpm -r typecheck",
