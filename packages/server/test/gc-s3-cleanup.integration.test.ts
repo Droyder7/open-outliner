@@ -150,10 +150,11 @@ describeDb('GC attachment S3 cleanup (ADR-0006)', () => {
 
   async function attachmentRow(attachmentId: string): Promise<{
     deleted_at: Date | null;
+    item_id: string | null;
     s3_key: string | null;
   }> {
-    const res = await db.query<{ deleted_at: Date | null; s3_key: string | null }>(
-      `SELECT deleted_at, s3_key FROM attachments WHERE id = $1`,
+    const res = await db.query<{ deleted_at: Date | null; item_id: string | null; s3_key: string | null }>(
+      `SELECT deleted_at, item_id, s3_key FROM attachments WHERE id = $1`,
       [attachmentId],
     );
     return res.rows[0]!;
@@ -208,13 +209,15 @@ describeDb('GC attachment S3 cleanup (ADR-0006)', () => {
     const { itemId, attachmentId, s3Key } = await itemWithAttachment(documentId, rootId);
 
     // Pass 1 WITHOUT S3 wiring: the item row must still be hard-deleted (the
-    // attachment FK was soft-deleted first) and the blob must survive untouched.
+    // attachment was soft-deleted AND detached first, satisfying the RESTRICT
+    // FK) and the blob must survive untouched.
     await createGcWorker(db, { retentionMs: 0, batchSize: 100 }).run();
 
     expect(await itemIds(documentId)).toEqual([rootId]);
     expect((await itemIds(documentId)).includes(itemId)).toBe(false);
     const softDeleted = await attachmentRow(attachmentId);
     expect(softDeleted.deleted_at).not.toBeNull();
+    expect(softDeleted.item_id).toBeNull(); // detached so the item row could go
     expect(softDeleted.s3_key).toBe(s3Key); // deferred — blob GC runs on its own window
     expect(await s3.headObject(s3Key)).not.toBeNull();
 

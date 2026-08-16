@@ -52,6 +52,18 @@ describeDb('QA gate: export round-trip (ADR-0016)', () => {
     await migrate(db, config.migrationsDir);
     store = createYjsStore(db);
     projector = createProjector({ db, store, replicaId: 'test', now });
+    // The suite authors documents against a fixed workspace id; create the
+    // tenant row (owner user + workspace) so the documents FK is satisfied.
+    // Idempotent + concurrency-safe: suites may share one CI Postgres.
+    await db.query(
+      `INSERT INTO users (id, email) VALUES ('00000000-0000-0000-0000-000000000001', 'qa-owner@e.test')
+       ON CONFLICT DO NOTHING`,
+    );
+    await db.query(
+      `INSERT INTO workspaces (id, owner_id, name)
+       VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000001', 'QA')
+       ON CONFLICT DO NOTHING`,
+    );
   });
 
   afterAll(async () => {

@@ -84,7 +84,15 @@ export async function getAttachmentForDownload(
   return res.rows[0] ?? null;
 }
 
-/** Soft-delete all live attachments for the given item (called before item GC). */
+/**
+ * Soft-delete all live attachments for the given item (called before item GC).
+ *
+ * Also DETACHES them (`item_id = NULL`): the `attachments_item_same_document_fk`
+ * FK is ON DELETE RESTRICT and a soft-deleted row still references the item, so
+ * without detaching, hard-deleting the item row would violate the FK. The blob
+ * GC later removes the S3 object via the row's `s3_key` (document-scoped), so
+ * losing the item reference is safe.
+ */
 export async function softDeleteAttachmentsForItem(
   tx: TxClient,
   documentId: string,
@@ -92,7 +100,8 @@ export async function softDeleteAttachmentsForItem(
 ): Promise<string[]> {
   const res = await tx.query<{ id: string; s3_key: string | null }>(
     `UPDATE attachments
-        SET deleted_at = now()
+        SET deleted_at = now(),
+            item_id   = NULL
       WHERE document_id = $1 AND item_id = $2 AND deleted_at IS NULL
       RETURNING id, s3_key`,
     [documentId, itemId],

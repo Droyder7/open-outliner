@@ -183,10 +183,11 @@ describeDb('replica_sync ledger + GC replica-ack gating (ADR-0019)', () => {
 
     it('gates per tombstone within one document (a blocked leaf does not hold back an unblocked leaf)', async () => {
       const { documentId, rootId } = await freshDocument();
-      // Tombstone A is older; tombstone B is newer. The replica synced between
-      // them: past B (unblocked) but not past A (blocked).
-      const blockedLeaf = await insertTombstone(documentId, rootId, threeDaysAgo());
-      const unblockedLeaf = await insertTombstone(documentId, rootId, twoDaysAgo());
+      // Tombstone A is OLDER (3d ago); tombstone B is NEWER (2d ago). The replica
+      // synced BETWEEN them (2.5d ago): it synced past A (has it — unblocked) but
+      // NOT past B (may still be missing it — blocked).
+      const unblockedLeaf = await insertTombstone(documentId, rootId, threeDaysAgo());
+      const blockedLeaf = await insertTombstone(documentId, rootId, twoDaysAgo());
       const between = new Date(Date.now() - 2.5 * 86_400_000);
       await touchReplica(db, { documentId, replicaId: 'r1', synced: true }, between);
 
@@ -250,12 +251,15 @@ describeDb('replica_sync ledger + GC replica-ack gating (ADR-0019)', () => {
         [leafId, documentId, parentId, twoDaysAgo()],
       );
 
+      // Bottom-up, ONE level per pass: the leaf goes first, the tombstoned
+      // parent (a leaf once its child is gone) waits for the next pass.
       await runGc();
-      // Leaf gone, tombstoned parent still referenced by nothing live → goes too,
-      // but only after its leaf. One pass with batch 100 clears both in order.
-      expect(await itemIds(documentId)).toEqual([rootId]);
+      expect(await itemIds(documentId)).toEqual(expect.arrayContaining([rootId, parentId]));
+      expect((await itemIds(documentId)).includes(leafId)).toBe(false);
 
-      // Re-run to prove the second pass is a no-op (idempotent).
+      // Second pass clears the now-leaf parent; the third is a no-op (idempotent).
+      await runGc();
+      expect(await itemIds(documentId)).toEqual([rootId]);
       await runGc();
       expect(await itemIds(documentId)).toEqual([rootId]);
     });

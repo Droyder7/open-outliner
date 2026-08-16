@@ -17,13 +17,19 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
 COPY --from=deps /app/packages/crdt/node_modules ./packages/crdt/node_modules
 COPY --from=deps /app/packages/server/node_modules ./packages/server/node_modules
-COPY tsconfig.base.json ./
+# Workspace manifests: pnpm --filter resolves packages by reading package.json
+# files under the workspace root — without them the build RUN matches nothing.
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY packages/shared/package.json packages/shared/
 COPY packages/shared/tsconfig.json packages/shared/
 COPY packages/shared/src packages/shared/src/
+COPY packages/crdt/package.json packages/crdt/
 COPY packages/crdt/tsconfig.json packages/crdt/
 COPY packages/crdt/src packages/crdt/src/
+COPY packages/server/package.json packages/server/
 COPY packages/server/tsconfig.json packages/server/
 COPY packages/server/src packages/server/src/
+COPY tsconfig.base.json ./
 COPY migrations ./migrations/
 RUN pnpm --filter @open-outliner/shared build && \
     pnpm --filter @open-outliner/crdt build && \
