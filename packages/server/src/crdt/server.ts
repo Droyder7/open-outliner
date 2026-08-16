@@ -1,3 +1,4 @@
+import * as Y from 'yjs';
 import { Hocuspocus } from '@hocuspocus/server';
 import { Database } from '@hocuspocus/extension-database';
 import { Forbidden } from '@hocuspocus/common';
@@ -6,6 +7,9 @@ import { createYjsStore, type YjsStore } from './yjs-store.js';
 import { createProjector, type Projector } from './projector.js';
 import { resolveWsConnection, startAuthHeartbeat, } from './auth.js';
 import { createConnectionRegistry, type ConnectionRegistry } from './connections.js';
+import { createReplicaHooks } from './replica-hooks.js';
+import { ITEMS_MAP } from '@open-outliner/shared';
+import { removeTombstoneKeysFromStore } from './gc-keys.js';
 import { createRateLimiter, type RateLimiter } from '../http/rate-limit.js';
 
 /**
@@ -21,6 +25,11 @@ import { createRateLimiter, type RateLimiter } from '../http/rate-limit.js';
  *   session id, so `RemoveMember`/`Logout` (the HTTP layer) can drop a live
  *   socket the instant a session is revoked, and a periodic heartbeat
  *   catches revocations this process didn't itself observe.
+ * - ADR-0019: the connection also carries the client's stable HLC replica id
+ *   (a `replicaId` URL parameter, ADR-0009) and a `synced` flag. `connected`
+ *   immediately writes a blocking `replica_sync` row; the client's
+ *   `replica.synced` stateless ack (`onStateless`) and the disconnect/heartbeat
+ *   touches advance `last_synced_at`, which is what gates tombstone-aware GC.
  * - `fetch` loads a room by replaying stored updates (corruption-tolerant).
  * - `store` durably commits each update to `yjs_updates` BEFORE Hocuspocus acks
  *   it to peers (the Database extension awaits this promise), so *acked ⇒
@@ -47,6 +56,15 @@ export interface CollabServer {
   connections: ConnectionRegistry;
   connectLimiter: RateLimiter;
   stopAuthHeartbeat: () => void;
+  /**
+   * Author tombstone key removals into the CRDT plane (ADR-0006/0019).
+   * Preferred path is a transaction on the LIVE room Document when one is
+   * loaded: Hocuspocus broadcasts the deletion to connected clients and the
+   * Database extension persists it. With no live room, falls back to a store
+   * delta (gc-keys.ts). Callers (the GC worker) invoke this under the replica-
+   * acknowledgement gate.
+   */
+  removeTombstoneKeys(documentId: string, itemIds: readonly string[]): Promise<void>;
 }
 
 export function createCollabServer(deps: CollabServerDeps): CollabServer {
@@ -60,6 +78,9 @@ export function createCollabServer(deps: CollabServerDeps): CollabServer {
   const connectLimiter = createRateLimiter(
     deps.connectRateLimit ?? { limit: 30, windowMs: 60_000 },
   );
+  // ADR-0019 ledger wiring (connected/onStateless/onDisconnect), extracted so it
+  // is unit-testable without a live server or database (replica-hooks.test.ts).
+  const replicaHooks = createReplicaHooks({ db, connections, log });
 
   // Per-document debounce timers so a burst of updates yields one projection pass.
   const timers = new Map<string, NodeJS.Timeout>();
@@ -100,13 +121,9 @@ export function createCollabServer(deps: CollabServerDeps): CollabServer {
         throw Forbidden;
       }
     },
-    async connected(data) {
-      const sessionId = (data.context as { sessionId?: string } | undefined)?.sessionId;
-      if (sessionId) connections.register(data.socketId, sessionId, data.connectionInstance);
-    },
-    async onDisconnect(data) {
-      connections.unregister(data.socketId);
-    },
+    connected: replicaHooks.connected,
+    onStateless: replicaHooks.onStateless,
+    onDisconnect: replicaHooks.onDisconnect,
     extensions: [
       new Database({
         fetch: async ({ documentName }) => {
@@ -131,5 +148,30 @@ export function createCollabServer(deps: CollabServerDeps): CollabServer {
     connections,
     connectLimiter,
     stopAuthHeartbeat: heartbeat.stop,
+    async removeTombstoneKeys(documentId, itemIds) {
+      if (itemIds.length === 0) return;
+      const room = hocuspocus.documents.get(documentId);
+      if (room && !room.isDestroyed) {
+        try {
+          // Live room: a server-side transaction on the room Document. Hocuspocus
+          // fires the document's onUpdate → broadcasts the deletion to every
+          // connected client, and the Database extension persists it durably
+          // (onStoreDocument). Connected clients converge immediately — without
+          // this, they would keep the tombstone key until their next sync.
+          Y.transact(room, () => {
+            const items = room.getMap(ITEMS_MAP);
+            for (const id of itemIds) items.delete(id);
+          });
+          return;
+        } catch (err) {
+          log(
+            `live-room tombstone removal failed for ${documentId}, falling back to store: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
+      await removeTombstoneKeysFromStore(store, documentId, itemIds);
+    },
   };
 }

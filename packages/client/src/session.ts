@@ -3,6 +3,8 @@ import { IndexeddbPersistence } from 'y-indexeddb';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { createRoot, getRootId, getChildren, insertItem, type Actor } from '@open-outliner/crdt';
 import { setStorageStatus } from './offline/storage-status.js';
+import { getOrCreateReplicaId } from './replica-id.js';
+import { syncAckPayload } from './sync-ack.js';
 
 /**
  * A client editing session for one document: the Y.Doc, its local IndexedDB
@@ -12,16 +14,14 @@ import { setStorageStatus } from './offline/storage-status.js';
  * (Phase 5/SEC). With no sync URL the app is a fully usable local outliner.
  */
 
-const REPLICA_KEY = 'oo:replicaId';
-
-/** A stable per-install replica id — the HLC tie-breaker (ADR-0009), NOT a user id. */
+/**
+ * A stable per-TAB replica id — the HLC tie-breaker (ADR-0009), NOT a user id.
+ * `sessionStorage` scopes it to this tab (survives refresh, dies with the tab)
+ * so every tab is its own replica with its own `replica_sync` ack row: one tab
+ * syncing can never unblock GC for a sibling tab still mid-sync (ADR-0019).
+ */
 function getReplicaId(): string {
-  let id = localStorage.getItem(REPLICA_KEY);
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem(REPLICA_KEY, id);
-  }
-  return id;
+  return getOrCreateReplicaId(sessionStorage);
 }
 
 /**
@@ -110,6 +110,18 @@ export function createSession(documentId: string): Session {
       name: documentId,
       document: doc,
       token: 'cookie',
+      // ADR-0019: the server reads this per-tab HLC replica id (ADR-0009) from
+      // the WS URL and gates tombstone-aware GC on this replica's sync
+      // acknowledgement.
+      parameters: { replicaId: actor.replicaId },
+      onSynced: ({ state }) => {
+        // Stateless ack (ADR-0019): a completed sync means this replica has
+        // received every tombstone broadcast up to this point. Sent on every
+        // initial sync / reconnect (the provider re-acks after a drop); the
+        // send decision is the pure syncAckPayload helper (sync-ack.ts).
+        const payload = syncAckPayload(state);
+        if (payload) provider?.sendStateless(payload);
+      },
       onAuthenticationFailed: ({ reason }) => {
         // Expected on logout/revocation (ADR-0014); avoid spamming the console.
         if (reason === 'permission-denied' || reason === 'Forbidden') return;

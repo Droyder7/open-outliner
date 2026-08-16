@@ -2,6 +2,12 @@
 
 **Status:** Accepted · **Date:** 2026-07-22 · **Deciders:** _TBD_
 
+> **Note (2026-08-16):** the replica id's SCOPE is refined by
+> [ADR-0019](./0019-replica-ack-gc-gating.md) — it is minted once per **tab**
+> (`sessionStorage`), not once per install, because it is also the key of the
+> `replica_sync` ack ledger and each tab is an independent editing replica. The
+> clock's structure, comparison, and update rules below are unchanged.
+
 > **Note (2026-07-22):** this ADR describes the HLC as guarding `parentId` + `rank` as two
 > sibling keys. [ADR-0010](./0010-atomic-move-register.md) tightens *what* the clock guards —
 > the HLC now lives inside a single atomic `move` register alongside `parentId` and `rank`,

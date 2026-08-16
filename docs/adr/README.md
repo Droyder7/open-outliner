@@ -24,6 +24,7 @@ one, add a new ADR that supersedes it and update the Status line here.
 | [0016](./0016-export-contract.md) | Export contract: Markdown + JSON round-trip | Accepted |
 | [0017](./0017-editor-interaction-model.md) | Editor interaction model: Workflowy-parity | Accepted |
 | [0018](./0018-plain-text-content-v1.md) | V1 item content is plain text; TipTap dropped for a direct `Y.Text` binding | Accepted |
+| [0019](./0019-replica-ack-gc-gating.md) | Replica-acknowledgement gating for the GC retention window | Accepted |
 
 ## Template
 

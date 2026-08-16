@@ -126,10 +126,18 @@ export function createProjector(deps: ProjectorDeps): Projector {
 
         const snapshots = readAllSnapshots(doc);
         const { rows } = projectSnapshots(snapshots, now(), replicaId);
+        const projectedIds = new Set(rows.map((r) => r.id));
 
         // Upsert in topological order (each row after its parent) so the
         // same-document parent FK is always satisfied. Roots (parent null) first.
         for (const row of topologicalOrder(rows)) {
+          // Stale-replica guard (ADR-0019): a child whose parent key was removed
+          // by GC while this replica was offline re-appears in the merged CRDT on
+          // reconnect with a dangling parentId. Upserting it would trip the
+          // same-document parent FK and brick the whole pass, so skip it — it
+          // re-projects if the parent ever reappears (e.g. a later undo
+          // re-creates the key).
+          if (row.parentId !== null && !projectedIds.has(row.parentId)) continue;
           await upsertProjectedItem(tx, documentId, row);
         }
 
