@@ -149,7 +149,18 @@ jobs:
         run: |
           docker compose up -d
           echo "Waiting for health..."
-          timeout 120 bash -c 'until docker compose exec app wget -qO- http://localhost:8787/health 2>/dev/null | grep -q ok; do sleep 2; done'
+          # curl the host-published port directly: `docker compose exec` without
+          # -T fails in GitHub Actions (no TTY) and would spin until timeout,
+          # and the app's compose healthcheck already covers the in-container
+          # path. This also matches the smoke steps below, which hit
+          # http://localhost:8787 from the runner.
+          if ! timeout 120 bash -c 'until curl -sf http://localhost:8787/health | grep -q ok; do sleep 2; done'; then
+            echo "::error::app did not report /health ok within 120s"
+            docker compose ps
+            echo "--- app logs ---"
+            docker compose logs app
+            exit 1
+          fi
       - name: Smoke - create document via API
         run: |
           # Signup
