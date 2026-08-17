@@ -70,6 +70,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Workspace packages are consumed as compiled artifacts (their exports
+      # maps point at dist, which is gitignored), so build them before
+      # migrate/tests on a fresh checkout — otherwise vitest cannot resolve
+      # @open-outliner/{shared,crdt}.
+      - run: pnpm --filter @open-outliner/shared build
+      - run: pnpm --filter @open-outliner/crdt build
       - run: pnpm migrate
       # MinIO is started as a step, not a service container: the minio/minio
       # image has CMD ["minio"] (no default `server /data`), so a service
