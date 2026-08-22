@@ -34,13 +34,28 @@ export function isCaretAtEnd(el: HTMLElement): boolean {
 /** Place the caret at character `offset` in `el`, clamped to its text length. */
 export function setCaretOffset(el: HTMLElement, offset: number): void {
   el.focus();
-  const textNode = el.firstChild;
   const len = el.textContent?.length ?? 0;
   const off = Math.max(0, Math.min(offset, len));
   const range = document.createRange();
   const sel = window.getSelection();
-  if (textNode && textNode.nodeType === Node.TEXT_NODE) {
-    range.setStart(textNode, off);
+  // The row's text may be split across several text nodes (browser splits or
+  // merged content from structural edits), so resolve the offset by walking
+  // them — setting it on `el.firstChild` can exceed that node's length.
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  let remaining = off;
+  let target: Node | null = null;
+  while (node) {
+    const nodeLen = node.textContent?.length ?? 0;
+    if (remaining <= nodeLen) {
+      target = node;
+      break;
+    }
+    remaining -= nodeLen;
+    node = walker.nextNode();
+  }
+  if (target) {
+    range.setStart(target, remaining);
   } else {
     range.setStart(el, 0);
   }
