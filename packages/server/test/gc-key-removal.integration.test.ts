@@ -18,6 +18,7 @@ import { createYjsStore, type YjsStore } from '../src/crdt/yjs-store.js';
 import { createProjector, type Projector } from '../src/crdt/projector.js';
 import { createConnectionRegistry } from '../src/crdt/connections.js';
 import { removeTombstoneKeysFromStore } from '../src/crdt/gc-keys.js';
+import { createCollabServer } from '../src/crdt/server.js';
 import { createGcWorker } from '../src/jobs/gc.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -202,6 +203,49 @@ describeDb('GC key removal — hard-delete sticks (ADR-0006/0019)', () => {
     await gcWorker({ liveConnections: () => registry.liveConnections() }).run();
     expect(await itemIds(documentId)).toEqual([rootId]);
     expect((await itemIds(documentId)).includes(childId)).toBe(false);
+    client.destroy();
+  });
+
+  it('live-room key removal persists the delta IMMEDIATELY, not via the ~2s Database-extension debounce', async () => {
+    const { documentId, rootId } = await freshDocument();
+    const { childId, client } = await tombstonedLeaf(documentId, rootId);
+
+    const collab = createCollabServer({
+      db,
+      replicaId: 'server',
+      sessionCookieName: 'oo_session',
+    });
+    try {
+      // A live room without a real socket: openDirectConnection loads the
+      // document into hocuspocus.documents (onLoadDocument → Database fetch).
+      const direct = await collab.hocuspocus.openDirectConnection(documentId);
+      try {
+        const room = collab.hocuspocus.documents.get(documentId);
+        expect(room).toBeTruthy();
+
+        await gcWorker({
+          removeTombstoneKeys: (doc, ids) => collab.removeTombstoneKeys(doc, ids),
+        }).run();
+
+        // Rows deleted…
+        expect(await itemIds(documentId)).toEqual([rootId]);
+        // …and the key deletion is ALREADY durable: without the direct delta
+        // persist, this replay would still contain the key until Hocuspocus's
+        // debounced onStoreDocument (~2s) fired — a crash in that window is
+        // exactly what the direct persist closes.
+        const reloaded = await collab.store.loadDocument(documentId);
+        try {
+          expect(itemsMap(reloaded).has(childId)).toBe(false);
+        } finally {
+          reloaded.destroy();
+        }
+      } finally {
+        await direct.disconnect();
+      }
+    } finally {
+      collab.stopAuthHeartbeat();
+      await collab.hocuspocus.destroy();
+    }
     client.destroy();
   });
 

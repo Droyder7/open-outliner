@@ -155,13 +155,24 @@ export function createCollabServer(deps: CollabServerDeps): CollabServer {
         try {
           // Live room: a server-side transaction on the room Document. Hocuspocus
           // fires the document's onUpdate → broadcasts the deletion to every
-          // connected client, and the Database extension persists it durably
-          // (onStoreDocument). Connected clients converge immediately — without
-          // this, they would keep the tombstone key until their next sync.
+          // connected client — without this, they would keep the tombstone key
+          // until their next sync. The Database extension would eventually
+          // persist it too, but behind its debounce (~2s): the GC transaction
+          // below commits the row deletes immediately, so a crash inside the
+          // debounce gap would lose the key deletions and the next projection
+          // pass would re-upsert the tombstones with a fresh deleted_at
+          // (retention silently restarting). Persist the delta directly —
+          // before returning — to make broadcast and durability atomic from
+          // the caller's perspective. Concurrent client updates merged into
+          // the room between the two state vectors merely ride along (storing
+          // an update twice is idempotent in Yjs).
+          const before = Y.encodeStateVector(room);
           Y.transact(room, () => {
             const items = room.getMap(ITEMS_MAP);
             for (const id of itemIds) items.delete(id);
           });
+          const delta = Y.encodeStateAsUpdate(room, before);
+          if (delta.length > 0) await store.storeUpdate(documentId, delta);
           return;
         } catch (err) {
           log(
