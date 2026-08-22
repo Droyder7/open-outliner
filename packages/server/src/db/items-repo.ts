@@ -111,6 +111,93 @@ export async function upsertProjectedItem(
 }
 
 /**
+ * Batch-upsert every projected item in ONE statement (the materializer's hot
+ * path). The per-row version above is O(n) round-trips and makes a single move
+ * in a 10k-item outline take seconds to project; this collapses the pass into
+ * one `unnest` query (the QA 10k gate: qa-performance.test.ts).
+ *
+ * Semantics are identical to `upsertProjectedItem` except one deliberate
+ * refinement: the `DO UPDATE ... WHERE` guard skips rows whose projected fields
+ * are unchanged, so `version` (the optimistic-concurrency counter) only bumps on
+ * an actual change — the old behavior re-bumped every row on every pass, which
+ * would spuriously invalidate client-held versions after any unrelated edit.
+ *
+ * Postgres checks the same-document parent FK (items_parent_same_document_fk)
+ * at statement end, so parents and children in the same batch satisfy it
+ * regardless of row order; the caller still filters out stale-replica orphans
+ * (ADR-0019) whose parent is absent from the batch.
+ */
+export async function upsertProjectedItemsBatch(
+  tx: TxClient,
+  documentId: string,
+  items: readonly ProjectedItem[],
+): Promise<void> {
+  if (items.length === 0) return;
+  const ids = items.map((i) => i.id);
+  const parentIds = items.map((i) => i.parentId);
+  const ranks = items.map((i) => i.rank);
+  const types = items.map((i) => i.type);
+  const contents = items.map((i) => i.content);
+  const notes = items.map((i) => i.note);
+  const completed = items.map((i) => i.isCompleted);
+  const collapsed = items.map((i) => i.isCollapsed);
+  const deleted = items.map((i) => i.deleted);
+
+  await tx.query(
+    `INSERT INTO items
+       (id, document_id, parent_id, rank, type, content, note,
+        is_completed, is_collapsed, deleted_at, version, updated_at)
+     SELECT
+        u.id, $1, u.parent_id, u.rank, u.type::item_type, u.content, u.note,
+        u.is_completed, u.is_collapsed,
+        CASE WHEN u.deleted THEN now() ELSE NULL END, 1, now()
+       FROM unnest(
+         $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::text[],
+         $7::text[], $8::boolean[], $9::boolean[], $10::boolean[]
+       ) AS u(id, parent_id, rank, type, content, note, is_completed, is_collapsed, deleted)
+     ON CONFLICT (id) DO UPDATE SET
+        parent_id    = EXCLUDED.parent_id,
+        rank         = EXCLUDED.rank,
+        type         = EXCLUDED.type,
+        content      = EXCLUDED.content,
+        note         = EXCLUDED.note,
+        is_completed = EXCLUDED.is_completed,
+        is_collapsed = EXCLUDED.is_collapsed,
+        -- Flip deleted_at only on transition: set when tombstoning for the first
+        -- time, clear on undo, otherwise preserve the existing timestamp.
+        deleted_at   = CASE
+                         WHEN EXCLUDED.deleted_at IS NOT NULL AND items.deleted_at IS NULL THEN EXCLUDED.deleted_at
+                         WHEN EXCLUDED.deleted_at IS NULL THEN NULL
+                         ELSE items.deleted_at
+                       END,
+        version      = items.version + 1,
+        updated_at   = now()
+     WHERE
+        items.parent_id IS DISTINCT FROM EXCLUDED.parent_id
+        OR items.rank IS DISTINCT FROM EXCLUDED.rank
+        OR items.type IS DISTINCT FROM EXCLUDED.type
+        OR items.content IS DISTINCT FROM EXCLUDED.content
+        OR items.note IS DISTINCT FROM EXCLUDED.note
+        OR items.is_completed IS DISTINCT FROM EXCLUDED.is_completed
+        OR items.is_collapsed IS DISTINCT FROM EXCLUDED.is_collapsed
+        OR (EXCLUDED.deleted_at IS NOT NULL AND items.deleted_at IS NULL)
+        OR (EXCLUDED.deleted_at IS NULL AND items.deleted_at IS NOT NULL)`,
+    [
+      documentId,
+      ids,
+      parentIds,
+      ranks,
+      types,
+      contents,
+      notes,
+      completed,
+      collapsed,
+      deleted,
+    ],
+  );
+}
+
+/**
  * Read a bounded-depth subtree rooted at `parentId` (or the document's true
  * roots when `parentId` is null) — the API's **load-on-expand** read
  * (api-and-write-path.md): callers page a large outline in by expanding

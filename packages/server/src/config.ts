@@ -11,6 +11,8 @@ export interface ServerConfig {
   sessionTtlMs: number;
   projectionSweepMs: number;
   authHeartbeatMs: number;
+  /** Replica-ack heartbeat: refresh `replica_sync` from live connections (ms). Default: 15 000. */
+  replicaHeartbeatMs: number;
   defaultDocDepth: number;
   defaultChildrenDepth: number;
   loginRateLimit: { limit: number; windowMs: number };
@@ -22,6 +24,10 @@ export interface ServerConfig {
   gcIntervalMs: number;
   /** GC: minimum age of deleted_at before a row may be hard-deleted (ms). Default: 7 days. */
   gcRetentionMs: number;
+  /** GC: prune replica_sync rows not seen for this long (ms). Default: 14 days. */
+  replicaStaleTtlMs: number;
+  /** GC: max never-acked (`last_synced_at IS NULL`) replica_sync rows per document. Default: 64. */
+  replicaNeverAckedCap: number;
   /** Compaction: interval between sweep passes (ms). Default: 60 000. */
   compactionIntervalMs: number;
   /** S3 endpoint URL (e.g. http://localhost:9000). Set to enable attachment storage. */
@@ -39,12 +45,15 @@ function env(name: string, fallback?: string): string {
   throw new Error(`Missing required environment variable: ${name}`);
 }
 
-function intEnv(name: string, fallback: number): number {
+function intEnv(name: string, fallback: number, min = 1): number {
   const v = process.env[name];
   if (v === undefined || v === '') return fallback;
   const n = Number.parseInt(v, 10);
   if (!Number.isFinite(n)) throw new Error(`Invalid integer for ${name}: ${v}`);
-  return n;
+  // Every int knob here is a count or an interval: 0/negative values (e.g.
+  // REPLICA_HEARTBEAT_MS=0 → a DB-write busy loop on setInterval) are
+  // misconfiguration, not a valid "disable" — clamp instead of spinning.
+  return Math.max(min, n);
 }
 
 let cachedDefaultMigrationsDir: string | undefined;
@@ -73,6 +82,7 @@ export function loadConfig(): ServerConfig {
     sessionTtlMs: intEnv('SESSION_TTL_MS', 1000 * 60 * 60 * 24 * 30),
     projectionSweepMs: intEnv('PROJECTION_SWEEP_MS', 10_000),
     authHeartbeatMs: intEnv('AUTH_HEARTBEAT_MS', 60_000),
+    replicaHeartbeatMs: intEnv('REPLICA_HEARTBEAT_MS', 15_000),
     defaultDocDepth: intEnv('DEFAULT_DOC_DEPTH', 2),
     defaultChildrenDepth: intEnv('DEFAULT_CHILDREN_DEPTH', 1),
     loginRateLimit: {
@@ -91,6 +101,8 @@ export function loadConfig(): ServerConfig {
     ...(corsOrigin ? { corsOrigin } : {}),
     gcIntervalMs: intEnv('GC_INTERVAL_MS', 60_000),
     gcRetentionMs: intEnv('GC_RETENTION_MS', 7 * 24 * 60 * 60 * 1000),
+    replicaStaleTtlMs: intEnv('REPLICA_STALE_TTL_MS', 14 * 24 * 60 * 60 * 1000),
+    replicaNeverAckedCap: intEnv('REPLICA_NEVER_ACKED_CAP', 64),
     compactionIntervalMs: intEnv('COMPACTION_INTERVAL_MS', 60_000),
     ...(s3Endpoint
       ? {

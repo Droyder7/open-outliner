@@ -13,6 +13,7 @@ exploratory history, **not** authority.
 | `0002_integrity_v1.sql` | V1 integrity hardening: same-document parent FK, `attachments` table with same-document item FK, and `document_projection` (monotonic projection revisions + catch-up). |
 | `0003_sessions_and_membership_v1.sql` | Session auth + membership ([ADR-0014](../docs/adr/0014-session-auth-and-revocation.md)): `users` table; workspace-scoped `workspace_members` (owner + equal members, one-owner partial unique index); reconciles the stale `document_members.role` CHECK to `owner`/`member`; adds the killable server-side `sessions` store. |
 | `0004_yjs_updates_serial_v1.sql` | Adds the `id BIGSERIAL` PRIMARY KEY to `yjs_updates` that [ADR-0013](../docs/adr/0013-projection-revision-guard.md) relies on for `source_rev` (`0001` created the table without it). This is the monotonic key the projection revision guard compares. |
+| `0005_replica_sync_v1.sql` | Replica sync-acknowledgement ledger ([ADR-0019](../docs/adr/0019-replica-ack-gc-gating.md)): `(document_id, replica_id)` with a monotonic `last_synced_at` (only a completed sync advances it) and a `last_seen_at` liveness column. This is what makes the tombstone-aware GC retention window a replica-acknowledgement bound rather than a bare wall clock ([ADR-0006](../docs/adr/0006-soft-delete-and-tombstone-gc.md)). |
 
 ## Conventions
 

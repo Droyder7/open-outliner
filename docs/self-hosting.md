@@ -34,7 +34,15 @@ interleave for a document:
 2. **Yjs compaction** — periodic snapshot + truncate of superseded incremental updates so room
    load stays bounded ([ADR-0015](./adr/0015-yjs-persistence-boundary.md)).
 3. **Tombstone-aware GC** — hard-deletes bottom-up after the replica-acknowledgement retention
-   window, and removes attachment S3 objects after their retention
+   window ([ADR-0019](./adr/0019-replica-ack-gc-gating.md): the `replica_sync` ledger, the
+   client stateless sync-ack, and the `REPLICA_HEARTBEAT_MS` tick keep `last_synced_at` fresh;
+   `GC_RETENTION_MS` is only the wall-clock floor), removes the hard-deleted items' Yjs keys
+   under the same gate (via the live room when loaded, else a store delta — so the projection
+   cannot re-upsert tombstones), prunes `replica_sync` rows not seen for
+   `REPLICA_STALE_TTL_MS` (default 14 days — see the GC-backlog note below), caps never-acked
+   rows at `REPLICA_NEVER_ACKED_CAP` per document (default 64 — bounds ledger bloat from
+   replica-id cycling), and removes
+   attachment S3 objects after their retention
    ([ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md), [attachments.md](./attachments.md)).
 
 ## Backup & restore — all authoritative planes together (decided)
@@ -52,6 +60,7 @@ backup captures them **together**:
 | S3/MinIO objects | bucket mirror (e.g. `mc mirror`) | **No** — the blobs themselves. |
 | `items` + `content_text` / `search_tsv` | (skippable) | **Yes** — re-project from `yjs_updates`. |
 | `document_projection` (revisions) | (skippable) | **Yes** — reset `projected_rev = 0`, let the sweep re-project. |
+| `replica_sync` (sync-ack ledger) | `pg_dump` | **No** — authoritative for the GC retention bound (ADR-0019). Losing it forgets offline replicas, so GC can hard-delete a tombstone an offline replica hasn't synced. Pairs with `yjs_updates`; a whole-DB `pg_dump` covers it. |
 
 **Restore order matters** (FK and rebuild dependencies):
 
@@ -76,6 +85,18 @@ orphans it (no tenancy, no membership, no attachment resolution).
 - **Compaction lag** — updates-since-last-snapshot per document; a growing tail means room-load
   time is drifting up ([ADR-0015](./adr/0015-yjs-persistence-boundary.md)).
 - **GC backlog** — count of tombstoned items/attachments past retention not yet hard-deleted.
+  **`gcBlockedDocs`** — the number of documents whose GC is currently gated by an unsynced
+  replica (`replica_sync.last_synced_at IS NULL OR last_synced_at <= items.deleted_at`). A
+  backlog that refuses to shrink, or a `gcBlockedDocs` value that won't drop, means a known
+  replica has not synced past the tombstones (ADR-0019); inspect `replica_sync` for the
+  blocking rows.
+  - **Most cases self-heal:** the GC pass auto-prunes rows for replicas not seen for
+    `REPLICA_STALE_TTL_MS` (default 14 days) — this covers a permanently-gone replica and a
+    connection whose sync-ack was lost (which would otherwise block GC forever). A returning
+    replica re-registers a blocking row and re-gates until it re-acks, so forgetting is safe.
+  - **Immediate unblock (operator):** after confirming a replica is truly dead, prune its row
+    by hand (`DELETE FROM replica_sync WHERE document_id = … AND replica_id = …`) — a stuck
+    GC is the accepted price of the ack bound, not a bug.
 
 ## Open questions (resolve during build)
 

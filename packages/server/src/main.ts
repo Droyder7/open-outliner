@@ -6,6 +6,7 @@ import { createHttpServer } from './http/server.js';
 import { createS3Service } from './storage/s3.js';
 import { createCompactionWorker } from './jobs/compaction.js';
 import { createGcWorker } from './jobs/gc.js';
+import { startReplicaHeartbeat } from './crdt/replica-heartbeat.js';
 
 /**
  * Process entrypoint: applies pending migrations, then brings up the two
@@ -38,13 +39,6 @@ async function main(): Promise<void> {
       : undefined;
   if (s3) log('S3 attachment storage enabled');
 
-  const gcWorker = createGcWorker(
-    db,
-    { retentionMs: config.gcRetentionMs, batchSize: 500 },
-    s3,
-  );
-  const compactionWorker = createCompactionWorker(db, { log });
-
   const collab = createCollabServer({
     db,
     replicaId: config.replicaId,
@@ -53,6 +47,40 @@ async function main(): Promise<void> {
     connectRateLimit: config.connectRateLimit,
     log,
   });
+
+  const gcWorker = createGcWorker(
+    db,
+    {
+      retentionMs: config.gcRetentionMs,
+      batchSize: 500,
+      // ADR-0006/0019: hard-delete removes the item's Yjs key too (live room
+      // when loaded, store delta otherwise), so projection can't re-upsert it.
+      removeTombstoneKeys: (documentId, itemIds) =>
+        collab.removeTombstoneKeys(documentId, itemIds),
+      // In-process supplement to the replica_sync gate (ADR-0019).
+      liveConnections: () => collab.connections.liveConnections(),
+      // Stale-replica policy: forget replicas not seen for the TTL (bounds
+      // ledger growth; auto-heals a lost sync-ack that would otherwise block
+      // GC forever). Returning replicas re-register + re-gate on connect.
+      replicaStaleTtlMs: config.replicaStaleTtlMs,
+      // Bound never-acked ledger rows per document (ADR-0019 accepted-downside
+      // guard against replica-id cycling).
+      neverAckedCap: config.replicaNeverAckedCap,
+      log,
+    },
+    s3,
+  );
+  const compactionWorker = createCompactionWorker(db, { log });
+
+  // Replica-ack heartbeat (ADR-0019): keeps `replica_sync.last_synced_at` fresh
+  // for live, already-synced connections so GC isn't blocked by clients that
+  // stay connected and idle.
+  const replicaHeartbeat = startReplicaHeartbeat(
+    db,
+    collab.connections,
+    config.replicaHeartbeatMs,
+    log,
+  );
 
   const http = createHttpServer({
     db,
@@ -108,6 +136,7 @@ async function main(): Promise<void> {
     log(`${signal} received, shutting down …`);
     for (const t of timers) clearInterval(t);
     collab.stopAuthHeartbeat();
+    replicaHeartbeat.stop();
     await new Promise<void>((resolve) => http.server.close(() => resolve()));
     await collab.hocuspocus.destroy();
     await db.close();

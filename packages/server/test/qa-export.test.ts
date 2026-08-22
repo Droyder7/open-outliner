@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import * as Y from 'yjs';
-import { rankBetween, rankAfter } from '@open-outliner/shared';
+import { rankBetween, rankAfter, ROOT_PARENT_SENTINEL } from '@open-outliner/shared';
 import { createDb, type Db } from '../src/db/db.js';
 import { migrate } from '../src/db/migrate.js';
 import { getLiveItems } from '../src/db/items-repo.js';
@@ -52,6 +52,18 @@ describeDb('QA gate: export round-trip (ADR-0016)', () => {
     await migrate(db, config.migrationsDir);
     store = createYjsStore(db);
     projector = createProjector({ db, store, replicaId: 'test', now });
+    // The suite authors documents against a fixed workspace id; create the
+    // tenant row (owner user + workspace) so the documents FK is satisfied.
+    // Idempotent + concurrency-safe: suites may share one CI Postgres.
+    await db.query(
+      `INSERT INTO users (id, email) VALUES ('00000000-0000-0000-0000-000000000001', 'qa-owner@e.test')
+       ON CONFLICT DO NOTHING`,
+    );
+    await db.query(
+      `INSERT INTO workspaces (id, owner_id, name)
+       VALUES ('00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000001', 'QA')
+       ON CONFLICT DO NOTHING`,
+    );
   });
 
   afterAll(async () => {
@@ -69,8 +81,20 @@ describeDb('QA gate: export round-trip (ADR-0016)', () => {
     );
     await db.query(
       `INSERT INTO document_projection (document_id, source_rev, projected_rev) VALUES ($1, 0, 0)`,
-      [documentId, documentId],
+      [documentId],
     );
+    // Author the synthetic root into the CRDT (id = documentId, parent = the
+    // sentinel) and sync it, as a real client does on first open. The
+    // projector skips any row whose parent is absent from the CRDT, so items
+    // under the root need the root present there to be projected at all.
+    const rootClient = headlessClient(store, documentId);
+    writeMove(rootClient.doc, documentId, {
+      parentId: ROOT_PARENT_SENTINEL,
+      rank: 'a0',
+      hlc: { wallMs: now(), counter: 0, replicaId: 'root-seed' },
+    });
+    await rootClient.sync();
+    rootClient.destroy();
   });
 
   it('JSON round-trip: export → import → structural equivalence', async () => {
@@ -92,7 +116,7 @@ describeDb('QA gate: export round-trip (ADR-0016)', () => {
         { id: idB1, parentId: idB, rank: 'a1', content: 'Item B1' },
       ];
       for (const item of items) {
-        writeMove(client.doc, item.id, documentId, {
+        writeMove(client.doc, item.id, {
           parentId: item.parentId,
           rank: item.rank,
           hlc: { wallMs: now(), counter: 0, replicaId },
@@ -159,7 +183,7 @@ describeDb('QA gate: export round-trip (ADR-0016)', () => {
     const client = headlessClient(store, documentId);
 
     client.doc.transact(() => {
-      writeMove(client.doc, randomUUID(), documentId, {
+      writeMove(client.doc, randomUUID(), {
         parentId: documentId,
         rank: 'a1',
         hlc: { wallMs: now(), counter: 0, replicaId },

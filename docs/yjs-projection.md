@@ -89,7 +89,11 @@ Client edits ──► Yjs doc (authoritative structure + text)
   projector's ancestor check only detects and, if the server is a participating replica, emits
   that repair — it never vetoes into a non-terminating loop (ADR-0012).
 - **No DB-side structural mutation.** No cascades; deletes are tombstones the projector
-  writes, and physical deletion is a separate GC job. → [ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md)
+  writes, and physical deletion is a separate GC job gated on replica acknowledgement
+  ([ADR-0019](./adr/0019-replica-ack-gc-gating.md)) that removes BOTH the `items` row and the
+  item's Yjs key — without the key removal the next projection pass would re-upsert the
+  tombstone.
+  → [ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md)
 
 ## Durability & recovery
 
@@ -103,11 +107,12 @@ about what is rebuildable from Yjs and what is authoritative relational data:
 | `document_projection` (revisions) | Projection bookkeeping | Rebuildable — reset `projected_rev = 0` and let the sweep re-project. |
 | `workspaces`, `documents`, `document_members` | **Authoritative** tenancy/membership | **Not in Yjs, not rebuildable.** Back up with `yjs_updates`. Losing these orphans every doc. |
 | `attachments` metadata + S3 objects | **Authoritative** blob plane | **Not in Yjs.** Coordinate backup with `yjs_updates`; an item's `move`/text survives a Yjs restore but its blobs do not. |
+| `replica_sync` (sync-ack ledger) | Authoritative for the GC retention bound | **Not in Yjs.** Losing it forgets offline replicas, so GC can hard-delete a tombstone an offline replica hasn't synced (ADR-0019). Back it up with `yjs_updates` + tenancy. |
 
 The asymmetry is real but **two-sided**: the item projection is a cache you regenerate; the
-tenancy, membership, and blob planes are primary data that a Yjs-only restore would **not**
-bring back. A coherent restore reconstitutes all authoritative planes together — see
-[architecture-overview.md](./architecture-overview.md) recovery and
+tenancy, membership, blob, and (since ADR-0019) replica-sync-ack planes are primary data that a
+Yjs-only restore would **not** bring back. A coherent restore reconstitutes all authoritative
+planes together — see [architecture-overview.md](./architecture-overview.md) recovery and
 [security-and-multitenancy.md](./security-and-multitenancy.md).
 
 ## FK-safe rebuild procedure

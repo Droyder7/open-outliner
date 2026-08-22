@@ -76,6 +76,10 @@ async function handleHealth(
     const projectionLag = await maxProjectionLag(db);
     const compactionLag = await maxCompactionLag(db);
     const gcBacklog = gcWorker ? await gcWorker.backlogCount() : 0;
+    // Documents whose GC is currently blocked by the replica-acknowledgement
+    // gate (ADR-0019): a stuck value means a known replica has not synced past
+    // the tombstones — see self-hosting.md for the remedy.
+    const gcBlockedDocs = gcWorker ? await gcWorker.blockedDocs() : 0;
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
       JSON.stringify({
@@ -84,6 +88,7 @@ async function handleHealth(
           projectionLag,
           compactionLag,
           gcBacklog,
+          gcBlockedDocs,
         },
       }),
     );

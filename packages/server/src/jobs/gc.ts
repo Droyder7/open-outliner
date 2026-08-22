@@ -6,7 +6,9 @@ import {
   clearS3Key,
   gcBacklogCount,
 } from '../db/attachments-repo.js';
+import { pruneStaleReplicas, pruneNeverAckedOverflow } from '../db/replica-sync-repo.js';
 import type { S3Service } from '../storage/s3.js';
+import type { RegisteredConnection } from '../crdt/connections.js';
 
 /**
  * Tombstone-aware GC worker (Phase 9 / ADR-0006).
@@ -14,12 +16,32 @@ import type { S3Service } from '../storage/s3.js';
  * Delete path:
  * 1. The CRDT `deleted` register on the subtree root is the tombstone (set by
  *    the client via ADR-0011). The materializer projects it to `items.deleted_at`.
- * 2. This worker hard-deletes rows bottom-up (leaves first) AFTER the
- *    replica-acknowledgement retention window, so offline replicas that synced
- *    past the tombstone can no longer revive the row.
- * 3. Attachment rows are soft-deleted BEFORE the item row is hard-deleted
+ * 2. This worker hard-deletes bottom-up (leaves first) only for tombstones
+ *    that are BOTH older than the wall-clock retention floor AND acknowledged
+ *    by every known replica (ADR-0019): a tombstone is eligible iff no replica
+ *    has `last_synced_at IS NULL OR last_synced_at <= deleted_at` in
+ *    `replica_sync`. A replica that synced past the tombstone can no longer
+ *    revive the item; one that hasn't (or never did) blocks it.
+ * 3. For each hard-deleted tombstone the worker ALSO removes the item's Yjs
+ *    key (ADR-0006 "removing both"): the deletion is authored on the live room
+ *    when one is loaded (broadcast to connected clients) or as a store delta
+ *    otherwise, so the next projection pass cannot re-upsert the tombstone
+ *    ("hard-delete sticks").
+ * 4. Attachment rows are soft-deleted BEFORE the item row is hard-deleted
  *    (the RESTRICT FK requires it); S3 objects are removed after their own
  *    retention window (deferred GC — avoids the offline-undo race).
+ *
+ * In addition to the durable ledger gate, a document is skipped entirely while
+ * ANY live connection for it has not completed its initial sync — this closes
+ * the connect→sync race in-process and covers multiple tabs sharing one
+ * `replicaId` (ADR-0019).
+ *
+ * Stale-replica policy (ADR-0019): before each pass, ledger rows for replicas
+ * not seen for `replicaStaleTtlMs` are pruned. This bounds ledger growth and
+ * auto-heals a connection whose sync-ack was lost (`last_synced_at` stays NULL
+ * forever and would otherwise block its document's GC indefinitely). Forgetting
+ * is safe because a returning replica re-registers a blocking row on connect
+ * and re-gates until it re-acks, and tombstone key deletions are durable.
  *
  * All work runs under the per-document advisory lock shared with the projector
  * and compaction so they cannot interleave for the same document.
@@ -30,6 +52,11 @@ export interface GcWorker {
   run(): Promise<number>;
   /** Return the current attachment S3 GC backlog count (for metrics). */
   backlogCount(): Promise<number>;
+  /**
+   * Count of documents with at least one tombstone currently blocked by the
+   * replica-acknowledgement gate (ADR-0019) — the "stuck GC" signal for OPS.
+   */
+  blockedDocs(): Promise<number>;
 }
 
 export interface GcConfig {
@@ -37,12 +64,42 @@ export interface GcConfig {
   retentionMs?: number;
   /** How many items to hard-delete per document per pass to bound lock hold time. */
   batchSize?: number;
+  /**
+   * Author tombstone key removals into the CRDT plane (ADR-0006/0019). Without
+   * it, GC prunes rows only and the next projection pass re-upserts the
+   * tombstone. main.ts wires this to `collab.removeTombstoneKeys`.
+   */
+  removeTombstoneKeys?: (documentId: string, itemIds: readonly string[]) => Promise<void>;
+  /**
+   * Live connection registry (ADR-0019): any live socket that has not completed
+   * its initial sync blocks GC for its document, in addition to the durable
+   * `replica_sync` gate.
+   */
+  liveConnections?: () => RegisteredConnection[];
+  /**
+   * Stale-replica pruning TTL (ADR-0019): replica_sync rows not seen for this
+   * long are forgotten before each pass (bounds ledger growth; auto-heals lost
+   * sync-acks). Default: 14 days.
+   */
+  replicaStaleTtlMs?: number;
+  /**
+   * Cap on never-acked (`last_synced_at IS NULL`) ledger rows per document
+   * (ADR-0019 accepted-downside guard against a client cycling fresh replica
+   * ids without ever syncing). Default: 64.
+   */
+  neverAckedCap?: number;
+  log?: (msg: string) => void;
 }
 
 async function getStaleDocuments(db: Db, cutoff: Date): Promise<string[]> {
+  // Oldest-tombstone-first so the bounded pass makes deterministic progress:
+  // with a bare LIMIT and no ordering, which documents each pass sees is
+  // unspecified and a document could be repeatedly unlucky.
   const res = await db.query<{ document_id: string }>(
-    `SELECT DISTINCT document_id FROM items
+    `SELECT document_id FROM items
       WHERE deleted_at IS NOT NULL AND deleted_at < $1
+      GROUP BY document_id
+      ORDER BY MIN(deleted_at)
       LIMIT 200`,
     [cutoff],
   );
@@ -59,7 +116,7 @@ async function gcDocument(
   documentId: string,
   cutoff: Date,
   batchSize: number,
-  _s3?: S3Service,
+  config: GcConfig,
 ): Promise<number> {
   return withDocumentLock(db, documentId, async (tx) => {
     // Tombstoned leaves: items with deleted_at before cutoff that have NO live
@@ -74,16 +131,44 @@ async function gcDocument(
             SELECT 1 FROM items c
              WHERE c.parent_id = i.id AND c.document_id = $1
           )
+          -- Replica-acknowledgement gate (ADR-0019): every known replica must
+          -- have synced strictly past this tombstone. NULL = never synced =
+          -- always blocks. Documents with no known replicas pass (nothing can
+          -- resurrect).
+          AND NOT EXISTS (
+            SELECT 1 FROM replica_sync r
+             WHERE r.document_id = $1
+               AND (r.last_synced_at IS NULL OR r.last_synced_at <= i.deleted_at)
+          )
         ORDER BY i.deleted_at
         LIMIT $3`,
       [documentId, cutoff, batchSize],
     );
+    if (res.rows.length === 0) return 0;
+
+    const itemIds = res.rows.map((r) => r.id);
+
+    // Remove the item keys from the CRDT plane FIRST (same gate): once the key
+    // is gone, no later projection pass can re-upsert the row, so the hard-
+    // delete sticks. Best-effort — a failure logs and falls back to row-only
+    // deletion (the next pass retries the churn case).
+    if (config.removeTombstoneKeys) {
+      try {
+        await config.removeTombstoneKeys(documentId, itemIds);
+      } catch (err) {
+        config.log?.(
+          `tombstone key removal failed for ${documentId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
 
     let deleted = 0;
-    for (const row of res.rows) {
-      await softDeleteAttachmentsForItem(tx, documentId, row.id);
+    for (const id of itemIds) {
+      await softDeleteAttachmentsForItem(tx, documentId, id);
       await tx.query(`DELETE FROM items WHERE id = $1 AND document_id = $2`, [
-        row.id,
+        id,
         documentId,
       ]);
       deleted++;
@@ -112,17 +197,70 @@ export function createGcWorker(
 ): GcWorker {
   const retentionMs = config.retentionMs ?? 7 * 24 * 60 * 60 * 1000; // 7 days
   const batchSize = config.batchSize ?? 500;
+  const staleTtlMs = config.replicaStaleTtlMs ?? 14 * 24 * 60 * 60 * 1000; // 14 days
+  const neverAckedCap = config.neverAckedCap ?? 64;
+  const log = config.log ?? (() => {});
+
+  async function gcBlockedDocs(): Promise<number> {
+    // Apply the same retention cutoff as the actual gate: without it, any
+    // document with a tombstone newer than some offline replica's last ack
+    // counts as "blocked" — the normal steady state, not a stuck ledger. This
+    // metric is the "stuck GC" signal (ADR-0019 OPS visibility), so it must
+    // count only tombstones that are eligible-but-gated.
+    const cutoff = new Date(Date.now() - retentionMs);
+    const res = await db.query<{ n: string }>(
+      `SELECT COUNT(DISTINCT i.document_id) AS n
+        FROM items i
+        WHERE i.deleted_at IS NOT NULL
+          AND i.deleted_at < $1
+          AND EXISTS (
+            SELECT 1 FROM replica_sync r
+             WHERE r.document_id = i.document_id
+               AND (r.last_synced_at IS NULL OR r.last_synced_at <= i.deleted_at)
+          )`,
+      [cutoff],
+    );
+    return Number.parseInt(res.rows[0]?.n ?? '0', 10);
+  }
 
   return {
     async run() {
+      // Stale-replica policy first (ADR-0019): forget replicas not seen for the
+      // TTL so a permanently-gone replica or a lost sync-ack cannot block GC
+      // forever and ledger rows cannot grow unbounded. Safe because a returning
+      // replica re-registers a blocking row on connect and re-gates until sync.
+      const pruned = await pruneStaleReplicas(db, new Date(Date.now() - staleTtlMs));
+      if (pruned > 0) log(`pruned ${pruned} stale replica_sync row(s)`);
+      // Bound never-acked rows per document (ADR-0019 accepted-downside guard):
+      // a client that never syncs legitimately gates its document, but a client
+      // cycling fresh replica ids must not bloat the ledger for a whole TTL.
+      const prunedNeverAcked = await pruneNeverAckedOverflow(db, neverAckedCap);
+      if (prunedNeverAcked > 0) {
+        log(`pruned ${prunedNeverAcked} never-acked replica_sync row(s) over the cap`);
+      }
+
       const cutoff = new Date(Date.now() - retentionMs);
       const docs = await getStaleDocuments(db, cutoff);
+
+      // In-process supplement to the durable gate (ADR-0019): a document with
+      // ANY live connection that hasn't completed its initial sync is skipped
+      // entirely. Closes the connect→sync race (the ledger row for a brand-new
+      // socket is written in `connected`, but a pass could otherwise read the
+      // gate before that write lands) and covers any client still receiving its
+      // first state regardless of its replica id — defense in depth on top of
+      // the per-tab ledger (one synced tab must never unblock a sibling).
+      const blockedByLiveConnection = new Set<string>();
+      for (const entry of config.liveConnections?.() ?? []) {
+        if (!entry.synced) blockedByLiveConnection.add(entry.documentName);
+      }
+
       let total = 0;
       for (const documentId of docs) {
+        if (blockedByLiveConnection.has(documentId)) continue;
         try {
-          total += await gcDocument(db, documentId, cutoff, batchSize, s3);
-        } catch {
-          // Log and continue; don't let one document stall the whole pass.
+          total += await gcDocument(db, documentId, cutoff, batchSize, config);
+        } catch (err) {
+          log(`GC failed for ${documentId}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
       if (s3) {
@@ -134,5 +272,7 @@ export function createGcWorker(
     async backlogCount() {
       return gcBacklogCount(db);
     },
+
+    blockedDocs: gcBlockedDocs,
   };
 }

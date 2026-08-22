@@ -104,9 +104,10 @@ describeDb('Hocuspocus WS auth + revocation (SEC, Phase 5)', () => {
     const fakeConn = (id: string) =>
       ({ close: () => closed.push(id) }) as unknown as import('@hocuspocus/server').Connection;
 
-    registry.register('socket-1', 'session-A', fakeConn('socket-1'));
-    registry.register('socket-2', 'session-A', fakeConn('socket-2'));
-    registry.register('socket-3', 'session-B', fakeConn('socket-3'));
+    // ADR-0019 signature: register(socketId, sessionId, documentName, replicaId, connection).
+    registry.register('socket-1', 'session-A', 'doc-1', 'replica-a', fakeConn('socket-1'));
+    registry.register('socket-2', 'session-A', 'doc-1', 'replica-b', fakeConn('socket-2'));
+    registry.register('socket-3', 'session-B', 'doc-1', 'replica-c', fakeConn('socket-3'));
 
     registry.closeSession('session-A');
     expect(closed.sort()).toEqual(['socket-1', 'socket-2']);
@@ -130,12 +131,18 @@ describeDb('Hocuspocus WS auth + revocation (SEC, Phase 5)', () => {
     // Simulates the real Connection: closing it eventually fires onDisconnect,
     // which unregisters the socket (crdt/server.ts) — without that, the
     // heartbeat would keep re-closing an already-closed, still-tracked socket.
-    registry.register('sock', sessionId, {
-      close: () => {
-        closed.push(sessionId);
-        registry.unregister('sock');
-      },
-    } as unknown as import('@hocuspocus/server').Connection);
+    registry.register(
+      'sock',
+      sessionId,
+      'doc-1',
+      'replica-hb',
+      {
+        close: () => {
+          closed.push(sessionId);
+          registry.unregister('sock');
+        },
+      } as unknown as import('@hocuspocus/server').Connection,
+    );
 
     // Revoke "out of band" (e.g. another node, or a direct admin action) —
     // the heartbeat, not closeSession, is what must notice this one.
