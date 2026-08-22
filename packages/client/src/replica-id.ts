@@ -23,3 +23,37 @@ export function getOrCreateReplicaId(
   storage.setItem(REPLICA_ID_KEY, fresh);
   return fresh;
 }
+
+/**
+ * Per-tab replica id for the live app.
+ *
+ * sessionStorage itself can be unavailable — Safari with "block all cookies"
+ * throws SecurityError on the property access — and a throw here would take the
+ * whole editor down with it. Fall back to an in-memory id: cross-refresh
+ * stability is lost (each page load is a fresh replica), which is GC-safe (the
+ * server registers a blocking row per connect and the ack clears it) and only
+ * weakens HLC tie-breaking across a refresh.
+ *
+ * Residual edge (accepted): "Duplicate Tab" copies sessionStorage, so the
+ * duplicate starts with the SAME replica id as the original — two editing
+ * contexts sharing one HLC clock and one `replica_sync` row. The GC hazard is
+ * covered server-side (the in-process live-connection gate blocks the document
+ * while either socket is unsynced); the HLC hazard degenerates to the
+ * pre-ADR-0019 per-install behavior for those two tabs only.
+ */
+export function getOrCreateTabReplicaId(): string {
+  try {
+    return getOrCreateReplicaId(sessionStorage);
+  } catch {
+    return getOrCreateReplicaId(memoryFallback);
+  }
+}
+
+// Module-scoped so the fallback id is stable for the page's lifetime.
+const memoryFallback: Pick<Storage, 'getItem' | 'setItem'> = (() => {
+  const memory = new Map<string, string>();
+  return {
+    getItem: (k) => memory.get(k) ?? null,
+    setItem: (k, v) => void memory.set(k, v),
+  };
+})();

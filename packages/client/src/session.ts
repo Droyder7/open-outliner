@@ -3,7 +3,7 @@ import { IndexeddbPersistence } from 'y-indexeddb';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { createRoot, getRootId, getChildren, insertItem, type Actor } from '@open-outliner/crdt';
 import { setStorageStatus } from './offline/storage-status.js';
-import { getOrCreateReplicaId } from './replica-id.js';
+import { getOrCreateTabReplicaId } from './replica-id.js';
 import { syncAckPayload } from './sync-ack.js';
 
 /**
@@ -19,9 +19,10 @@ import { syncAckPayload } from './sync-ack.js';
  * `sessionStorage` scopes it to this tab (survives refresh, dies with the tab)
  * so every tab is its own replica with its own `replica_sync` ack row: one tab
  * syncing can never unblock GC for a sibling tab still mid-sync (ADR-0019).
+ * Never throws, even where sessionStorage is unavailable (see replica-id.ts).
  */
 function getReplicaId(): string {
-  return getOrCreateReplicaId(sessionStorage);
+  return getOrCreateTabReplicaId();
 }
 
 /**
