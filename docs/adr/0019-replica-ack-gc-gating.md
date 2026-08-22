@@ -57,8 +57,11 @@ can never regress a replica past a tombstone, and a delayed/older ack cannot eit
   `replica.synced` (`REPLICA_SYNCED_PAYLOAD`). The server's `onStateless` hook marks the socket
   synced and persists `last_synced_at` immediately — no waiting for a tick.
 - **Connect touch (blocking).** `connected` writes the ledger row right away with
-  `synced: false`, i.e. `last_synced_at = NULL`. This closes the connect→sync-complete race:
-  GC is blocked from the instant a replica is known until it completes its first sync.
+  `synced: false`, i.e. the touch carries `last_synced_at = NULL`. On a first-ever connect this
+  inserts a row that blocks GC until the replica acks; on a reconnect the monotonic (`GREATEST`)
+  upsert *preserves* the prior `last_synced_at`, which keeps gating every tombstone newer than
+  that ack — equally blocking, never weaker. This closes the connect→sync-complete race for a
+  replica's first appearance.
 - **Heartbeat tick (continuous-liveness bound).** A client that stays connected and idle never
   re-sends the ack (the provider only re-syncs on connect), so without a tick its
   acknowledgement would go stale and block GC forever even though it received every broadcast.
@@ -91,8 +94,10 @@ worker therefore prunes, before every pass, any row whose `last_seen_at` is olde
 survives the TTL is a replica that has genuinely not been heard from for the whole window.
 
 Forgetting is **not** the end of the ack bound, because the bound re-forms on reconnection:
-a replica that returns re-registers a blocking row in the `connected` hook
-(`last_synced_at = NULL`) and re-gates its document until it completes a sync and re-acks.
+a replica that returns re-registers in the `connected` hook — and because the upsert is
+monotonic, its **prior** `last_synced_at` survives the reconnect, so every tombstone newer
+than that ack keeps blocking GC until the replica syncs and re-acks. A first-ever (or
+post-forgetting) connect inserts `last_synced_at = NULL` and gates until the first ack.
 The tombstone key deletions GC authored while it was away are durable updates, so the
 returning replica converges through normal sync. The accepted edge is narrow and deliberate:
 a replica absent **longer than the TTL** loses the gate's protection for tombstones GC
@@ -107,8 +112,9 @@ and never forgets; the TTL forgets only after a long, deliberate absence.
 - **Newly required:** migration 0005; the client ack (`session.ts`) and `replicaId` parameter;
   the server heartbeat job; the hook wiring in `crdt/server.ts`; the gate in `jobs/gc.ts`.
   Config knobs: `REPLICA_HEARTBEAT_MS` (default 15 000 — faster than the 60s GC interval so a
-  fully-synced idle client unblocks GC within one tick) and `REPLICA_STALE_TTL_MS` (default
-  14 days — the stale-replica pruning TTL, section 5).
+  fully-synced idle client unblocks GC within one tick), `REPLICA_STALE_TTL_MS` (default
+  14 days — the stale-replica pruning TTL, section 5), and `REPLICA_NEVER_ACKED_CAP`
+  (default 64 — the per-document cap on never-acked rows).
 - **OPS: `replica_sync` is authoritative for the GC bound and is NOT rebuildable from Yjs.**
   Losing the ledger forgets offline replicas, which makes GC *appear* unblocked and can
   hard-delete a tombstone an offline replica hasn't synced — the exact failure ADR-0006
@@ -125,25 +131,40 @@ and never forgets; the TTL forgets only after a long, deliberate absence.
   attributable to `replica_sync`) before it matters.
 - **Accepted downsides:** a client can connect with a `replicaId` and never sync; while it
   stays seen (`last_seen_at` fresh — the heartbeat keeps it fresh while connected) it blocks
-  GC, and after the TTL it is forgotten (section 5). `last_synced_at` is a boolean-ish "synced
+  GC, and after the TTL it is forgotten (section 5). The parameter is untrusted, so it is
+  accepted only as a well-formed UUID (anything else is treated as a legacy client and never
+  written to the ledger), and never-acked rows are capped per document
+  (`REPLICA_NEVER_ACKED_CAP`, default 64 — kept freshest-first, so a genuine mid-first-sync
+  client always survives the cap) to bound ledger bloat from replica-id cycling.
+  `last_synced_at` is a boolean-ish "synced
   past now" bound, not a precise version vector — sufficient because the server only needs
   "synced past the tombstone", and acked updates are durable (ADR-0015), so "synced" is
   meaningful.
 - **Key removal is implemented (ADR-0006's "removing both").** GC hard-delete removes the
   item's Yjs key under this same gate — a transaction on the **live Hocuspocus room** when one
-  is loaded (Hocuspocus broadcasts the deletion to connected clients and the Database
-  extension persists it), else a **store delta** (`gc-keys.ts`) that rides normal Yjs sync to
-  reconnecting replicas. Without key removal the next projection pass re-upserts the tombstone
-  ("hard-delete doesn't stick"); with it, the row deletion is stable and deleted items are
-  actually purged from the CRDT plane.
-- **Residual race (largely closed).** The connect touch runs in the `connected` hook before
-  any sync is served to that socket; GC additionally skips a document while **any live
-  connection** for it has not completed its initial sync (in-process registry check), which
-  closes the connect→sync race in the V1 single-process topology. Replica ids are per-tab
-  (section 1), so a synced tab can never unblock a sibling tab sharing its id — the
-  in-process gate remains as defense in depth for any legacy/shared-id client. A multi-node
-  deployment would need a shared registry or equivalent distributed signal; V1 is
-  single-process, and even then the row deletion is rebuildable from Yjs (ADR-0004).
+  is loaded (Hocuspocus broadcasts the deletion to connected clients) whose delta is persisted
+  to the store **directly and immediately** (not deferred to the Database extension's
+  debounced `onStoreDocument`, which would leave a crash window where the rows are already
+  deleted but the key deletions are not yet durable), else a **store delta** (`gc-keys.ts`)
+  that rides normal Yjs sync to reconnecting replicas. Without key removal the next projection
+  pass re-upserts the tombstone ("hard-delete doesn't stick"); with it, the row deletion is
+  stable and deleted items are actually purged from the CRDT plane.
+- **Residual race (largely closed).** Hocuspocus does **not** guarantee that the
+  `connected` hook's ledger write lands before the socket's initial sync is served: the
+  framework flushes the queued sync messages and invokes `connected` unawaited. What the
+  implementation actually relies on: the hook registers the socket in the in-process registry
+  synchronously (its first statement, before any `await`), and GC skips a document while **any
+  live connection** for it has not completed its initial sync. A GC pass that reads
+  `replica_sync` in the milliseconds before a reconnecting replica's connect touch commits is
+  still gated by that replica's **persisted** row from its previous session (stale acks block
+  newer tombstones). The only uncovered case is a replica's first-ever connect racing a pass —
+  such a replica holds no pre-tombstone state, so it receives the post-deletion state and
+  converges; a returning replica whose row was pruned by the TTL is the accepted edge of
+  section 5. Replica ids are per-tab (section 1), so a synced tab can never unblock a sibling
+  tab sharing its id — the in-process gate remains as defense in depth for any legacy/shared-id
+  client. A multi-node deployment would need a shared registry or equivalent distributed
+  signal; V1 is single-process, and even then the row deletion is rebuildable from Yjs
+  (ADR-0004).
 
 ## Alternatives considered
 

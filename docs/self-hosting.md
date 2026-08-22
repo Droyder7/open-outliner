@@ -39,7 +39,9 @@ interleave for a document:
    `GC_RETENTION_MS` is only the wall-clock floor), removes the hard-deleted items' Yjs keys
    under the same gate (via the live room when loaded, else a store delta — so the projection
    cannot re-upsert tombstones), prunes `replica_sync` rows not seen for
-   `REPLICA_STALE_TTL_MS` (default 14 days — see the GC-backlog note below), and removes
+   `REPLICA_STALE_TTL_MS` (default 14 days — see the GC-backlog note below), caps never-acked
+   rows at `REPLICA_NEVER_ACKED_CAP` per document (default 64 — bounds ledger bloat from
+   replica-id cycling), and removes
    attachment S3 objects after their retention
    ([ADR-0006](./adr/0006-soft-delete-and-tombstone-gc.md), [attachments.md](./attachments.md)).
 

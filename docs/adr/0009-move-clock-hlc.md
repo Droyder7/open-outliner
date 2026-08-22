@@ -7,6 +7,15 @@
 > (`sessionStorage`), not once per install, because it is also the key of the
 > `replica_sync` ack ledger and each tab is an independent editing replica. The
 > clock's structure, comparison, and update rules below are unchanged.
+>
+> Residual edge of the per-tab scope: a browser's "Duplicate Tab" **copies**
+> `sessionStorage`, so the duplicate briefly shares the original tab's replica
+> id — two editing contexts over one HLC clock and one ledger row. GC safety is
+> unaffected (ADR-0019's in-process live-connection gate blocks the document
+> while either socket is mid-sync); HLC tie-breaking between the two duplicated
+> tabs degenerates to the pre-ADR-0019 per-install behavior (ties on
+> wall+counter resolve arbitrarily). Accepted as narrower than the per-install
+> status quo it replaced.
 
 > **Note (2026-07-22):** this ADR describes the HLC as guarding `parentId` + `rank` as two
 > sibling keys. [ADR-0010](./0010-atomic-move-register.md) tightens *what* the clock guards —
