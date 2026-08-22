@@ -8,6 +8,7 @@ import {
   touchReplica,
   hasUnsyncedReplicaPast,
   pruneStaleReplicas,
+  pruneNeverAckedOverflow,
 } from '../src/db/replica-sync-repo.js';
 import { createGcWorker } from '../src/jobs/gc.js';
 
@@ -345,6 +346,101 @@ describeDb('replica_sync ledger + GC replica-ack gating (ADR-0019)', () => {
       await worker.run();
 
       expect(await itemIds(documentId)).toEqual(expect.arrayContaining([rootId, leafId]));
+    });
+  });
+
+  describe('never-acked overflow cap (ADR-0019 accepted-downside bound)', () => {
+    it('keeps the freshest N never-acked rows per document, drops older ones, never touches acked rows', async () => {
+      const { documentId: docA } = await freshDocument();
+      const { documentId: docB } = await freshDocument();
+      // 70 never-acked rows in docA with staggered last_seen_at, oldest first
+      // (a hostile member cycling fresh replica ids without ever syncing).
+      for (let i = 0; i < 70; i++) {
+        await touchReplica(
+          db,
+          { documentId: docA, replicaId: `fake-${String(i).padStart(3, '0')}`, synced: false },
+          new Date(Date.now() - (100 - i) * 3_600_000),
+        );
+      }
+      // Acked rows are never subject to the cap, however many there are.
+      await touchReplica(db, { documentId: docA, replicaId: 'acked-1', synced: true }, oneDayAgo());
+      // docB is under the cap — must be untouched.
+      for (let i = 0; i < 5; i++) {
+        await touchReplica(db, { documentId: docB, replicaId: `b-${i}`, synced: false }, sixHoursAgo());
+      }
+
+      const pruned = await pruneNeverAckedOverflow(db, 64);
+      expect(pruned).toBe(6);
+
+      const aRows = (
+        await db.query<{ replica_id: string }>(
+          `SELECT replica_id FROM replica_sync WHERE document_id = $1 ORDER BY replica_id`,
+          [docA],
+        )
+      ).rows.map((r) => r.replica_id);
+      expect(aRows.filter((id) => id.startsWith('fake-'))).toHaveLength(64);
+      // The 6 LEAST-recently-seen fakes are dropped; the freshest survive.
+      expect(aRows).not.toContain('fake-000');
+      expect(aRows).not.toContain('fake-005');
+      expect(aRows).toContain('fake-069');
+      expect(aRows).toContain('acked-1');
+
+      const bCount = await db.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM replica_sync WHERE document_id = $1`,
+        [docB],
+      );
+      expect(bCount.rows[0]!.n).toBe(5);
+    });
+
+    it('the GC worker applies the cap on every pass', async () => {
+      const { documentId } = await freshDocument();
+      for (let i = 0; i < 4; i++) {
+        await touchReplica(
+          db,
+          { documentId, replicaId: `cyl-${i}`, synced: false },
+          new Date(Date.now() - (4 - i) * 3_600_000),
+        );
+      }
+
+      await createGcWorker(db, { retentionMs: 0, batchSize: 100, neverAckedCap: 2 }).run();
+
+      const rows = await db.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM replica_sync
+          WHERE document_id = $1 AND last_synced_at IS NULL`,
+        [documentId],
+      );
+      expect(rows.rows[0]!.n).toBe(2);
+    });
+  });
+
+  describe('gcBlockedDocs metric (retention-aware stuck signal)', () => {
+    it('counts only documents with retention-ELIGIBLE tombstones gated by an unsynced replica', async () => {
+      const worker = createGcWorker(db, { retentionMs: 7 * 86_400_000, batchSize: 100 });
+      // Baseline: suites may share one Postgres, so assert deltas, not absolutes.
+      const before = await worker.blockedDocs();
+
+      // Blocked but NOT yet retention-eligible (tombstone 2d old, retention 7d):
+      // the normal steady state for any doc with a recent deletion and an
+      // offline replica — must NOT count as "stuck".
+      const young = await freshDocument();
+      await insertTombstone(young.documentId, young.rootId, twoDaysAgo());
+      await touchReplica(db, { documentId: young.documentId, replicaId: 'r1', synced: true }, threeDaysAgo());
+      expect(await worker.blockedDocs()).toBe(before);
+
+      // Blocked AND retention-eligible (tombstone 9d old) → counted. The
+      // replica synced BEFORE the tombstone (12d ago), so the gate blocks it.
+      const old = await freshDocument();
+      await insertTombstone(
+        old.documentId,
+        old.rootId,
+        new Date(Date.now() - 9 * 86_400_000),
+      );
+      await touchReplica(
+        db,
+        { documentId: old.documentId, replicaId: 'r1', synced: true },
+        new Date(Date.now() - 12 * 86_400_000),
+      );
+      expect(await worker.blockedDocs()).toBe(before + 1);
     });
   });
 });

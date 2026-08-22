@@ -63,6 +63,9 @@ async function main(): Promise<void> {
       // ledger growth; auto-heals a lost sync-ack that would otherwise block
       // GC forever). Returning replicas re-register + re-gate on connect.
       replicaStaleTtlMs: config.replicaStaleTtlMs,
+      // Bound never-acked ledger rows per document (ADR-0019 accepted-downside
+      // guard against replica-id cycling).
+      neverAckedCap: config.replicaNeverAckedCap,
       log,
     },
     s3,

@@ -66,6 +66,40 @@ export async function pruneStaleReplicas(db: Db, olderThan: Date): Promise<numbe
 }
 
 /**
+ * Bound ledger bloat from never-acked rows (ADR-0019 accepted-downside guard):
+ * keep at most `maxPerDocument` rows with `last_synced_at IS NULL` per document,
+ * dropping the least-recently-seen. A client that connects and never completes a
+ * sync legitimately blocks its document's GC (the ADR's accepted downside), but
+ * the ledger itself must not grow without bound — a hostile member cycling
+ * fresh replica ids at the connect rate limit would otherwise accumulate rows
+ * for the whole stale TTL. A genuine mid-first-sync client survives: the
+ * heartbeat advances its `last_seen_at` every few seconds, so it always ranks
+ * among the freshest rows of its document. Returns the number of rows pruned.
+ */
+export async function pruneNeverAckedOverflow(
+  db: Db,
+  maxPerDocument: number,
+): Promise<number> {
+  const res = await db.query(
+    `DELETE FROM replica_sync
+      WHERE ctid IN (
+        SELECT tid FROM (
+          SELECT ctid AS tid,
+                 row_number() OVER (
+                   PARTITION BY document_id
+                   ORDER BY last_seen_at DESC, replica_id
+                 ) AS rn
+            FROM replica_sync
+           WHERE last_synced_at IS NULL
+        ) ranked
+       WHERE ranked.rn > $1
+      )`,
+    [maxPerDocument],
+  );
+  return res.rowCount ?? 0;
+}
+
+/**
  * True when any known replica of the document has NOT acknowledged sync past
  * `since` (or has never completed a sync at all) — i.e. GC must NOT hard-delete
  * a tombstone projected at `since`. False when the document has no known

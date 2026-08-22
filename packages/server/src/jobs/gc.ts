@@ -6,7 +6,7 @@ import {
   clearS3Key,
   gcBacklogCount,
 } from '../db/attachments-repo.js';
-import { pruneStaleReplicas } from '../db/replica-sync-repo.js';
+import { pruneStaleReplicas, pruneNeverAckedOverflow } from '../db/replica-sync-repo.js';
 import type { S3Service } from '../storage/s3.js';
 import type { RegisteredConnection } from '../crdt/connections.js';
 
@@ -82,13 +82,24 @@ export interface GcConfig {
    * sync-acks). Default: 14 days.
    */
   replicaStaleTtlMs?: number;
+  /**
+   * Cap on never-acked (`last_synced_at IS NULL`) ledger rows per document
+   * (ADR-0019 accepted-downside guard against a client cycling fresh replica
+   * ids without ever syncing). Default: 64.
+   */
+  neverAckedCap?: number;
   log?: (msg: string) => void;
 }
 
 async function getStaleDocuments(db: Db, cutoff: Date): Promise<string[]> {
+  // Oldest-tombstone-first so the bounded pass makes deterministic progress:
+  // with a bare LIMIT and no ordering, which documents each pass sees is
+  // unspecified and a document could be repeatedly unlucky.
   const res = await db.query<{ document_id: string }>(
-    `SELECT DISTINCT document_id FROM items
+    `SELECT document_id FROM items
       WHERE deleted_at IS NOT NULL AND deleted_at < $1
+      GROUP BY document_id
+      ORDER BY MIN(deleted_at)
       LIMIT 200`,
     [cutoff],
   );
@@ -187,18 +198,27 @@ export function createGcWorker(
   const retentionMs = config.retentionMs ?? 7 * 24 * 60 * 60 * 1000; // 7 days
   const batchSize = config.batchSize ?? 500;
   const staleTtlMs = config.replicaStaleTtlMs ?? 14 * 24 * 60 * 60 * 1000; // 14 days
+  const neverAckedCap = config.neverAckedCap ?? 64;
   const log = config.log ?? (() => {});
 
   async function gcBlockedDocs(): Promise<number> {
+    // Apply the same retention cutoff as the actual gate: without it, any
+    // document with a tombstone newer than some offline replica's last ack
+    // counts as "blocked" — the normal steady state, not a stuck ledger. This
+    // metric is the "stuck GC" signal (ADR-0019 OPS visibility), so it must
+    // count only tombstones that are eligible-but-gated.
+    const cutoff = new Date(Date.now() - retentionMs);
     const res = await db.query<{ n: string }>(
       `SELECT COUNT(DISTINCT i.document_id) AS n
         FROM items i
         WHERE i.deleted_at IS NOT NULL
+          AND i.deleted_at < $1
           AND EXISTS (
             SELECT 1 FROM replica_sync r
              WHERE r.document_id = i.document_id
                AND (r.last_synced_at IS NULL OR r.last_synced_at <= i.deleted_at)
           )`,
+      [cutoff],
     );
     return Number.parseInt(res.rows[0]?.n ?? '0', 10);
   }
@@ -211,6 +231,13 @@ export function createGcWorker(
       // replica re-registers a blocking row on connect and re-gates until sync.
       const pruned = await pruneStaleReplicas(db, new Date(Date.now() - staleTtlMs));
       if (pruned > 0) log(`pruned ${pruned} stale replica_sync row(s)`);
+      // Bound never-acked rows per document (ADR-0019 accepted-downside guard):
+      // a client that never syncs legitimately gates its document, but a client
+      // cycling fresh replica ids must not bloat the ledger for a whole TTL.
+      const prunedNeverAcked = await pruneNeverAckedOverflow(db, neverAckedCap);
+      if (prunedNeverAcked > 0) {
+        log(`pruned ${prunedNeverAcked} never-acked replica_sync row(s) over the cap`);
+      }
 
       const cutoff = new Date(Date.now() - retentionMs);
       const docs = await getStaleDocuments(db, cutoff);

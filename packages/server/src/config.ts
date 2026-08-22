@@ -26,6 +26,8 @@ export interface ServerConfig {
   gcRetentionMs: number;
   /** GC: prune replica_sync rows not seen for this long (ms). Default: 14 days. */
   replicaStaleTtlMs: number;
+  /** GC: max never-acked (`last_synced_at IS NULL`) replica_sync rows per document. Default: 64. */
+  replicaNeverAckedCap: number;
   /** Compaction: interval between sweep passes (ms). Default: 60 000. */
   compactionIntervalMs: number;
   /** S3 endpoint URL (e.g. http://localhost:9000). Set to enable attachment storage. */
@@ -43,12 +45,15 @@ function env(name: string, fallback?: string): string {
   throw new Error(`Missing required environment variable: ${name}`);
 }
 
-function intEnv(name: string, fallback: number): number {
+function intEnv(name: string, fallback: number, min = 1): number {
   const v = process.env[name];
   if (v === undefined || v === '') return fallback;
   const n = Number.parseInt(v, 10);
   if (!Number.isFinite(n)) throw new Error(`Invalid integer for ${name}: ${v}`);
-  return n;
+  // Every int knob here is a count or an interval: 0/negative values (e.g.
+  // REPLICA_HEARTBEAT_MS=0 → a DB-write busy loop on setInterval) are
+  // misconfiguration, not a valid "disable" — clamp instead of spinning.
+  return Math.max(min, n);
 }
 
 let cachedDefaultMigrationsDir: string | undefined;
@@ -97,6 +102,7 @@ export function loadConfig(): ServerConfig {
     gcIntervalMs: intEnv('GC_INTERVAL_MS', 60_000),
     gcRetentionMs: intEnv('GC_RETENTION_MS', 7 * 24 * 60 * 60 * 1000),
     replicaStaleTtlMs: intEnv('REPLICA_STALE_TTL_MS', 14 * 24 * 60 * 60 * 1000),
+    replicaNeverAckedCap: intEnv('REPLICA_NEVER_ACKED_CAP', 64),
     compactionIntervalMs: intEnv('COMPACTION_INTERVAL_MS', 60_000),
     ...(s3Endpoint
       ? {

@@ -7,7 +7,7 @@ import type {
 } from '@hocuspocus/server';
 import { REPLICA_SYNCED_PAYLOAD } from '@open-outliner/shared';
 import { createConnectionRegistry } from '../src/crdt/connections.js';
-import { createReplicaHooks } from '../src/crdt/replica-hooks.js';
+import { createReplicaHooks, isValidReplicaId } from '../src/crdt/replica-hooks.js';
 import type { Db } from '../src/db/db.js';
 
 /**
@@ -21,6 +21,10 @@ import type { Db } from '../src/db/db.js';
  * for an acknowledgement (synced: true). The tests assert on those params, so
  * they pin the ledger semantics without coupling to the SQL text.
  */
+
+// The server only accepts well-formed UUID replica ids (clients mint
+// crypto.randomUUID()); the hook treats anything else as a legacy client.
+const REPLICA_A = 'a0000000-0000-4000-8000-00000000000a';
 
 type QueryCall = { text: string; params: unknown[] };
 
@@ -46,7 +50,7 @@ function connectedData(overrides: {
   replicaId?: string | null;
   documentName?: string;
 } = {}): connectedPayload {
-  const { socketId = 'socket-1', replicaId = 'replica-a', documentName = 'doc-1' } = overrides;
+  const { socketId = 'socket-1', replicaId = REPLICA_A, documentName = 'doc-1' } = overrides;
   // `in` check: an explicit `undefined` must stay undefined (destructuring
   // defaults would treat it as absent and fall back to 'session-1').
   const sessionId = 'sessionId' in overrides ? overrides.sessionId : 'session-1';
@@ -85,12 +89,12 @@ describe('replica hooks — ADR-0019 ledger wiring (connected/onStateless/onDisc
       socketId: 'socket-1',
       sessionId: 'session-1',
       documentName: 'doc-1',
-      replicaId: 'replica-a',
+      replicaId: REPLICA_A,
       synced: false,
     });
     expect(calls).toHaveLength(1);
     expect(calls[0]!.params[0]).toBe('doc-1');
-    expect(calls[0]!.params[1]).toBe('replica-a');
+    expect(calls[0]!.params[1]).toBe(REPLICA_A);
     expect(calls[0]!.params[2]).toBeNull(); // synced:false → GC stays blocked
     expect(calls[0]!.params[3]).toBeInstanceOf(Date);
   });
@@ -113,6 +117,35 @@ describe('replica hooks — ADR-0019 ledger wiring (connected/onStateless/onDisc
 
     await hooks.connected(connectedData({ replicaId: null }));
 
+    expect(registry.liveConnections()[0]!.replicaId).toBeUndefined();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('isValidReplicaId accepts only well-formed UUIDs', () => {
+    expect(isValidReplicaId(REPLICA_A)).toBe(true);
+    expect(isValidReplicaId(REPLICA_A.toUpperCase())).toBe(true); // case-insensitive
+    expect(isValidReplicaId(crypto.randomUUID())).toBe(true);
+    expect(isValidReplicaId(undefined)).toBe(false);
+    expect(isValidReplicaId('replica-a')).toBe(false); // not a UUID
+    expect(isValidReplicaId('')).toBe(false);
+    // A 36-char string that is not a UUID must not sneak past a length check.
+    expect(isValidReplicaId('x'.repeat(36))).toBe(false);
+    // Hostile/oversized values never become ledger keys.
+    expect(isValidReplicaId(`${REPLICA_A}'; DROP TABLE replica_sync--`)).toBe(false);
+    expect(isValidReplicaId('x'.repeat(10_000))).toBe(false);
+  });
+
+  it('connected with a MALFORMED replicaId registers without one (legacy path, no ledger write)', async () => {
+    const registry = createConnectionRegistry();
+    const { db, calls } = fakeDb();
+    const hooks = createReplicaHooks({ db, connections: registry });
+
+    // A hostile client probing the ledger with a non-UUID parameter: the
+    // socket stays registered (the live-connection GC gate still covers it)
+    // but nothing is written to replica_sync.
+    await hooks.connected(connectedData({ replicaId: 'fake-replica-not-a-uuid' }));
+
+    expect(registry.liveConnections()).toHaveLength(1);
     expect(registry.liveConnections()[0]!.replicaId).toBeUndefined();
     expect(calls).toHaveLength(0);
   });
@@ -157,7 +190,7 @@ describe('replica hooks — ADR-0019 ledger wiring (connected/onStateless/onDisc
     expect(registry.liveConnections()[0]!.synced).toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.params[0]).toBe('doc-1');
-    expect(calls[0]!.params[1]).toBe('replica-a');
+    expect(calls[0]!.params[1]).toBe(REPLICA_A);
     expect(calls[0]!.params[2]).toBeInstanceOf(Date); // synced:true → ack timestamp
   });
 
@@ -185,7 +218,7 @@ describe('replica hooks — ADR-0019 ledger wiring (connected/onStateless/onDisc
 
     expect(registry.liveConnections()).toHaveLength(0); // unregistered
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.params[1]).toBe('replica-a');
+    expect(calls[0]!.params[1]).toBe(REPLICA_A);
     expect(calls[0]!.params[2]).toBeInstanceOf(Date); // synced:true → refresh
   });
 
