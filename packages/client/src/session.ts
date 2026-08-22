@@ -3,7 +3,7 @@ import { IndexeddbPersistence } from 'y-indexeddb';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { createRoot, getRootId, getChildren, insertItem, type Actor } from '@open-outliner/crdt';
 import { setStorageStatus } from './offline/storage-status.js';
-import { getOrCreateTabReplicaId } from './replica-id.js';
+import { claimTabReplicaId, getOrCreateTabReplicaId, type ReplicaClaimChannel, type ReplicaIdClaim } from './replica-id.js';
 import { syncAckPayload } from './sync-ack.js';
 
 /**
@@ -15,17 +15,6 @@ import { syncAckPayload } from './sync-ack.js';
  */
 
 /**
- * A stable per-TAB replica id — the HLC tie-breaker (ADR-0009), NOT a user id.
- * `sessionStorage` scopes it to this tab (survives refresh, dies with the tab)
- * so every tab is its own replica with its own `replica_sync` ack row: one tab
- * syncing can never unblock GC for a sibling tab still mid-sync (ADR-0019).
- * Never throws, even where sessionStorage is unavailable (see replica-id.ts).
- */
-function getReplicaId(): string {
-  return getOrCreateTabReplicaId();
-}
-
-/**
  * Wait (briefly) for the provider's first server sync before deciding
  * whether this document needs a root seeded. Without this, a fresh browser
  * tab with an empty local IndexedDB cache — opening a document that already
@@ -34,21 +23,29 @@ function getReplicaId(): string {
  * racing the "exactly one root per document" invariant. Bounded so a
  * genuinely offline client still becomes usable (product principle #1):
  * no server round trip is required to type.
+ *
+ * Reads the provider through a getter: the provider can be REPLACED at most
+ * once (a lost duplicate-tab duel rebinds the sync connection under a fresh
+ * replica id), and the wait must follow the replacement rather than hang on
+ * a destroyed provider until the timeout.
  */
 function waitForInitialSync(
-  provider: HocuspocusProvider | undefined,
+  getProvider: () => HocuspocusProvider | undefined,
   timeoutMs = 4000,
 ): Promise<void> {
-  if (!provider) return Promise.resolve();
-  if (provider.synced) return Promise.resolve();
   return new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, timeoutMs);
-    const onSynced = (): void => {
+    let settled = false;
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      clearInterval(poll);
       clearTimeout(timer);
-      provider.off('synced', onSynced);
       resolve();
     };
-    provider.on('synced', onSynced);
+    const poll = setInterval(() => {
+      if (getProvider()?.synced) settle();
+    }, 50);
+    const timer = setTimeout(settle, timeoutMs);
   });
 }
 
@@ -91,7 +88,8 @@ export interface Session {
 
 export function createSession(documentId: string): Session {
   const doc = new Y.Doc();
-  const actor: Actor = { replicaId: getReplicaId(), now: () => Date.now() };
+  const initialReplicaId = getReplicaId();
+  const actor: Actor = { replicaId: initialReplicaId, now: () => Date.now() };
   // The document's synthetic root uses the document id as its item id, so every
   // replica derives the SAME root id and can never create a second root.
   const rootId = documentId;
@@ -99,22 +97,29 @@ export function createSession(documentId: string): Session {
   const idb = new IndexeddbPersistence(`oo:${documentId}`, doc);
 
   const syncUrl = import.meta.env.VITE_SYNC_URL;
+  // The replica id the sync connection identifies as. Starts as the tab's id
+  // and is replaced (with the connection) at most once, if this tab loses the
+  // duplicate-tab duel below. The actor's HLC stamps keep the id they were
+  // minted with: the id is metadata (Yjs's per-instance client id remains the
+  // concurrent-write arbiter), so stamps under the pre-duel id stay valid.
+  let replicaId = initialReplicaId;
   let provider: HocuspocusProvider | undefined;
-  if (syncUrl) {
-    // Hocuspocus requires a non-empty `token` whenever the server defines
-    // `onAuthenticate`. Auth itself is the httpOnly session cookie on the WS
-    // upgrade (ADR-0014) — the token value is ignored server-side. Prefer a
-    // same-origin URL (Vite proxies `/collaboration` → :8788) so the cookie
-    // is always attached; `ws://localhost:8788` cross-port can drop it.
-    provider = new HocuspocusProvider({
-      url: syncUrl,
+
+  // Hocuspocus requires a non-empty `token` whenever the server defines
+  // `onAuthenticate`. Auth itself is the httpOnly session cookie on the WS
+  // upgrade (ADR-0014) — the token value is ignored server-side. Prefer a
+  // same-origin URL (Vite proxies `/collaboration` → :8788) so the cookie
+  // is always attached; `ws://localhost:8788` cross-port can drop it.
+  const makeProvider = (id: string, url: string): HocuspocusProvider =>
+    new HocuspocusProvider({
+      url,
       name: documentId,
       document: doc,
       token: 'cookie',
       // ADR-0019: the server reads this per-tab HLC replica id (ADR-0009) from
       // the WS URL and gates tombstone-aware GC on this replica's sync
       // acknowledgement.
-      parameters: { replicaId: actor.replicaId },
+      parameters: { replicaId: id },
       onSynced: ({ state }) => {
         // Stateless ack (ADR-0019): a completed sync means this replica has
         // received every tombstone broadcast up to this point. Sent on every
@@ -136,14 +141,34 @@ export function createSession(documentId: string): Session {
         console.warn('[sync] websocket closed:', event.code, event.reason);
       },
     });
-  }
+
+  if (syncUrl) provider = makeProvider(replicaId, syncUrl);
+
+  // Duplicate-tab duel (ADR-0009 note, 2026-08-22): "Duplicate Tab" copies
+  // sessionStorage, so the duplicate would start with the original's replica
+  // id — two editing contexts sharing one `replica_sync` row and one HLC
+  // identity. The loser of the duel (whoever announced second) re-mints,
+  // persists the fresh id, and rebinds its sync connection under it. The
+  // original tab keeps its id; the shared row is left to expire via the
+  // stale-replica TTL (the safe direction — it keeps blocking GC).
+  const claim: ReplicaIdClaim | undefined = syncUrl
+    ? claimTabReplicaId(
+        claimChannel(documentId),
+        undefined,
+        (freshId) => {
+          replicaId = freshId;
+          provider?.destroy();
+          provider = makeProvider(freshId, syncUrl);
+        },
+      )
+    : undefined;
 
   const session: Session = {
     doc,
     actor,
     documentId,
     rootId,
-    whenReady: Promise.all([waitForLocalPersistence(idb), waitForInitialSync(provider)]).then(
+    whenReady: Promise.all([waitForLocalPersistence(idb), waitForInitialSync(() => provider)]).then(
       () => {
         // Seed a root + first empty bullet once local AND (if configured) server
         // state has loaded, so a brand-new document is immediately typeable
@@ -155,10 +180,47 @@ export function createSession(documentId: string): Session {
       },
     ),
     destroy() {
+      claim?.stop();
       provider?.destroy();
       void idb.destroy();
       doc.destroy();
     },
   };
   return session;
+}
+
+/**
+ * A stable per-TAB replica id — the HLC tie-breaker (ADR-0009), NOT a user id.
+ * `sessionStorage` scopes it to this tab (survives refresh, dies with the tab)
+ * so every tab is its own replica with its own `replica_sync` ack row: one tab
+ * syncing can never unblock GC for a sibling tab still mid-sync (ADR-0019).
+ * Never throws, even where sessionStorage is unavailable (see replica-id.ts).
+ * Sharing via "Duplicate Tab" is detected and healed by the claim duel in
+ * createSession (ADR-0009 note, 2026-08-22).
+ */
+function getReplicaId(): string {
+  return getOrCreateTabReplicaId();
+}
+
+/**
+ * The document-scoped BroadcastChannel for the duplicate-tab duel, adapted to
+ * the minimal ReplicaClaimChannel seam (so the duel logic stays testable
+ * without a browser). undefined where BroadcastChannel doesn't exist — the
+ * duel then simply doesn't run, which the server-side defenses already cover.
+ */
+function claimChannel(documentId: string): ReplicaClaimChannel | undefined {
+  if (typeof BroadcastChannel === 'undefined') return undefined;
+  const bc = new BroadcastChannel(`oo:replica-claim:${documentId}`);
+  let handler: ReplicaClaimChannel['onmessage'] = null;
+  return {
+    postMessage: (data) => bc.postMessage(data),
+    close: () => bc.close(),
+    get onmessage() {
+      return handler;
+    },
+    set onmessage(h) {
+      handler = h;
+      bc.onmessage = h ? (ev) => h({ data: String(ev.data) }) : null;
+    },
+  };
 }

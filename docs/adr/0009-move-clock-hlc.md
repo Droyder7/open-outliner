@@ -2,6 +2,22 @@
 
 **Status:** Accepted · **Date:** 2026-07-22 · **Deciders:** _TBD_
 
+> **Note (2026-08-22):** the duplicate-tab residual edge above is **closed in the client**
+> rather than accepted. On session start a tab announces its replica id on a document-scoped
+> `BroadcastChannel` (`oo:replica-claim:<documentId>`; `claim:`/`taken:` messages —
+> [replica-id.ts](../packages/client/src/replica-id.ts), `claimReplicaId`). A tab that learns
+> another live tab already holds its id — the duplicate, since "Duplicate Tab" copies
+> `sessionStorage` — re-mints, re-persists, and rebinds its sync connection under the fresh id
+> ([session.ts](../packages/client/src/session.ts)); the original keeps its id. Whoever
+> announces second loses, so the invariant is "no two LIVE tabs share an id". Residuals: a
+> brief window between duplicate-open and the `taken:` reply during which the tabs share the
+> id — covered exactly as before by ADR-0019's in-process live-connection gate (the server
+> also logs a shared-id warning for observability) — and HLC stamps minted under the pre-duel
+> id in that window, which remain valid because the id is metadata: concurrent `move`/
+> `deleted` writes are arbitrated by Yjs's per-instance client id, not by the HLC (see the
+> 2026-08-16 note's tie-break discussion). A tab navigating away stops answering claims; a
+> returning tab re-announces, so the bound re-forms.
+
 > **Note (2026-08-16):** the replica id's SCOPE is refined by
 > [ADR-0019](./0019-replica-ack-gc-gating.md) — it is minted once per **tab**
 > (`sessionStorage`), not once per install, because it is also the key of the
@@ -15,7 +31,9 @@
 > while either socket is mid-sync); HLC tie-breaking between the two duplicated
 > tabs degenerates to the pre-ADR-0019 per-install behavior (ties on
 > wall+counter resolve arbitrarily). Accepted as narrower than the per-install
-> status quo it replaced.
+> status quo it replaced. *(Superseded for the sharing itself by the 2026-08-22
+> note above; the fallback reasoning still describes the brief pre-re-mint
+> window.)*
 
 > **Note (2026-07-22):** this ADR describes the HLC as guarding `parentId` + `rank` as two
 > sibling keys. [ADR-0010](./0010-atomic-move-register.md) tightens *what* the clock guards —

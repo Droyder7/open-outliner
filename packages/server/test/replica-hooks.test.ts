@@ -44,12 +44,14 @@ function fakeConnection(socketId: string): Connection {
 }
 
 /** Build a `connected` payload; `sessionId: undefined` simulates a missing auth context. */
-function connectedData(overrides: {
-  socketId?: string;
-  sessionId?: string | undefined;
-  replicaId?: string | null;
-  documentName?: string;
-} = {}): connectedPayload {
+function connectedData(
+  overrides: {
+    socketId?: string;
+    sessionId?: string | undefined;
+    replicaId?: string | null;
+    documentName?: string;
+  } = {},
+): connectedPayload {
   const { socketId = 'socket-1', replicaId = REPLICA_A, documentName = 'doc-1' } = overrides;
   // `in` check: an explicit `undefined` must stay undefined (destructuring
   // defaults would treat it as absent and fall back to 'session-1').
@@ -76,6 +78,35 @@ function disconnectData(socketId = 'socket-1'): onDisconnectPayload {
 }
 
 describe('replica hooks — ADR-0019 ledger wiring (connected/onStateless/onDisconnect)', () => {
+  it('connected logs a warning when another live socket already holds the same replicaId (duplicated tab / legacy client)', async () => {
+    const registry = createConnectionRegistry();
+    const { db } = fakeDb();
+    const logs: string[] = [];
+    const hooks = createReplicaHooks({ db, connections: registry, log: (m) => logs.push(m) });
+
+    await hooks.connected(connectedData({ socketId: 'socket-1' }));
+    await hooks.connected(connectedData({ socketId: 'socket-2' }));
+
+    expect(registry.liveConnections()).toHaveLength(2); // both still registered
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain(REPLICA_A);
+    expect(logs[0]).toContain('socket-1');
+    expect(logs[0]).toContain('socket-2');
+  });
+
+  it('no duplicate warning when the same replicaId reconnects after its old socket disconnected', async () => {
+    const registry = createConnectionRegistry();
+    const { db } = fakeDb();
+    const logs: string[] = [];
+    const hooks = createReplicaHooks({ db, connections: registry, log: (m) => logs.push(m) });
+
+    await hooks.connected(connectedData({ socketId: 'socket-1' }));
+    await hooks.onDisconnect(disconnectData('socket-1'));
+    await hooks.connected(connectedData({ socketId: 'socket-2' }));
+
+    expect(logs).toHaveLength(0); // a refresh is the normal path — no noise
+  });
+
   it('connected registers the socket and writes a BLOCKING ledger row (last_synced_at NULL)', async () => {
     const registry = createConnectionRegistry();
     const { db, calls } = fakeDb();
@@ -272,7 +303,11 @@ describe('replica hooks — ADR-0019 ledger wiring (connected/onStateless/onDisc
       }),
     } as unknown as Db;
     const logs: string[] = [];
-    const failingHooks = createReplicaHooks({ db: failing, connections: registry, log: (m) => logs.push(m) });
+    const failingHooks = createReplicaHooks({
+      db: failing,
+      connections: registry,
+      log: (m) => logs.push(m),
+    });
 
     await expect(failingHooks.onDisconnect(disconnectData())).resolves.toBeUndefined();
     expect(registry.liveConnections()).toHaveLength(0); // socket was already unregistered

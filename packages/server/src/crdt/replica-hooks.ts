@@ -70,6 +70,28 @@ export function createReplicaHooks(deps: ReplicaHooksDeps): ReplicaHooks {
       if (!sessionId) return;
       const raw = data.requestParameters.get('replicaId') ?? undefined;
       const replicaId = isValidReplicaId(raw) ? raw : undefined;
+      if (replicaId) {
+        // Observability for a shared replica id (ADR-0009 note, 2026-08-22):
+        // the client's duplicate-tab duel heals this within a reconnect, so a
+        // live-live sighting is either the brief duel window, a legacy
+        // per-install client, or a refresh racing the old socket's disconnect.
+        // The GC gate is unaffected (every socket is gated individually).
+        const twin = connections
+          .liveConnections()
+          .find(
+            (e) =>
+              e.replicaId === replicaId &&
+              e.documentName === data.documentName &&
+              e.socketId !== data.socketId,
+          );
+        if (twin) {
+          log(
+            `shared replicaId live on ${data.documentName}: ${replicaId} ` +
+              `(sockets ${twin.socketId}, ${data.socketId}) — duplicated tab or legacy client; ` +
+              `GC gating unaffected`,
+          );
+        }
+      }
       connections.register(
         data.socketId,
         sessionId,

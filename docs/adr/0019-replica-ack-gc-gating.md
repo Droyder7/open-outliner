@@ -37,6 +37,11 @@ shared row while a sibling tab of the same id was still receiving its first stat
 the window the gate exists to close. Per-tab identity makes the ledger truthful per editing
 context and keeps the HLC's per-replica monotonicity assumption intact for concurrent offline
 edits from two tabs (the in-process live-connection gate below remains as defense in depth).
+"Duplicate Tab" — which **copies** `sessionStorage`, and with it the replica id — is closed
+client-side by a document-scoped BroadcastChannel claim duel: the second tab to announce a
+shared id re-mints and rebinds its connection under the fresh id (ADR-0009 note, 2026-08-22),
+and the server logs a shared-id warning while two live sockets hold one id (legacy clients
+included). The in-process gate covers the brief pre-re-mint window.
 
 ### 2. The `replica_sync` ledger (migration 0005)
 
