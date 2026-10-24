@@ -102,3 +102,17 @@ test('a different authenticated account never receives cached pending work', asy
   await expect(page.getByRole('status')).toContainText('Reconnect to sync');
   expect(uploads).toBe(0);
 });
+
+test('structural undo and redo keep the original text recoverable', async ({ page }) => {
+  await page.goto('/');
+  const row = page.getByRole('textbox').first();
+  await row.fill('A recoverable idea');
+  await row.press('End');
+  await row.press('Enter');
+  await expect(page.getByRole('textbox')).toHaveCount(2);
+  await page.keyboard.press('Control+z');
+  await expect(page.getByRole('textbox')).toHaveCount(1);
+  await expect(page.getByRole('textbox').first()).toHaveText('A recoverable idea');
+  await page.keyboard.press('Control+Shift+z');
+  await expect(page.getByRole('textbox')).toHaveCount(2);
+});

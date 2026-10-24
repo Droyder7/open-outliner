@@ -111,7 +111,7 @@ export function createSession(documentId: string, options: SessionOptions = {}):
   const rootId = documentId;
 
   const idb = new IndexeddbPersistence(
-    options.accountId ? `oo:personal:${options.accountId}:${documentId}` : `oo:${documentId}`,
+    options.accountId ? `oo:personal:v2:${options.accountId}:${documentId}` : `oo:${documentId}`,
     doc,
   );
 
@@ -136,7 +136,7 @@ export function createSession(documentId: string, options: SessionOptions = {}):
       // ADR-0019: the server reads this per-tab HLC replica id (ADR-0009) from
       // the WS URL and gates tombstone-aware GC on this replica's sync
       // acknowledgement.
-      parameters: { replicaId: id },
+      parameters: { replicaId: id, schemaVersion: '2' },
       onSynced: ({ state }) => {
         // Stateless ack (ADR-0019): a completed sync means this replica has
         // received every tombstone broadcast up to this point. Sent on every

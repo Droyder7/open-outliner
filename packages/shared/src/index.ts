@@ -5,3 +5,5 @@ export * from './yjs-schema.js';
 export * from './cycle.js';
 export * from './item-commands.js';
 export * from './rpc.js';
+
+export * from './effective-tree.js';

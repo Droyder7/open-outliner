@@ -29,6 +29,7 @@ one, add a new ADR that supersedes it and update the Status line here.
 | [0021](./0021-personal-first.md) | Personal-first local-first product and delivery | Accepted |
 | [0022](./0022-persistence-generations.md) | Committed generations and bounded compaction | Accepted |
 | [0023](./0023-offline-library-and-receipts.md) | Local catalog and committed update receipts | Accepted |
+| [0024](./0024-personal-tree-semantics.md) | Schema v2 tree, deletion and undo | Accepted |
 
 ## Template
 

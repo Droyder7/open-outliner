@@ -59,6 +59,14 @@ export function readMove(node: Y.Map<unknown>): MoveRegister | undefined {
 }
 
 export function readDeleted(node: Y.Map<unknown>): DeletedRegister {
+  if (node.doc?.getMap('meta').get('schemaVersion') === 2) {
+    const deletes = node.get('deleteRecords');
+    const restores = node.get('restoreRecords');
+    const active =
+      deletes instanceof Y.Map &&
+      [...deletes.keys()].some((token) => !(restores instanceof Y.Map && restores.has(token)));
+    return { isDeleted: Boolean(active), hlc: { wallMs: 0, counter: 0, replicaId: '' } };
+  }
   const del = node.get(NODE_KEY.deleted) as Y.Map<unknown> | undefined;
   if (!del) return { isDeleted: false, hlc: { wallMs: 0, counter: 0, replicaId: '' } };
   const isDeleted = del.get(DELETED_KEY.isDeleted);
@@ -129,23 +137,57 @@ export function readAllSnapshots(doc: Y.Doc): ItemNodeSnapshot[] {
  * replaced so a concurrent merge can never produce a torn `{parentId, rank}`.
  */
 export function writeMove(doc: Y.Doc, id: string, move: MoveRegister): void {
-  Y.transact(doc, () => {
-    const items = itemsMap(doc);
-    let node = items.get(id);
-    if (!node) {
-      node = new Y.Map<unknown>();
-      items.set(id, node);
-    }
-    const moveMap = new Y.Map<unknown>();
-    moveMap.set(MOVE_KEY.parentId, move.parentId);
-    moveMap.set(MOVE_KEY.rank, move.rank);
-    moveMap.set(MOVE_KEY.hlc, newHlcMap(move.hlc));
-    node.set(NODE_KEY.move, moveMap);
-  });
+  const rootId = doc.getMap('meta').get('rootId');
+  if (rootId === id && move.parentId !== ROOT_PARENT_SENTINEL) return;
+  Y.transact(
+    doc,
+    () => {
+      const items = itemsMap(doc);
+      let node = items.get(id);
+      if (!node) {
+        node = new Y.Map<unknown>();
+        items.set(id, node);
+      }
+      const moveMap = new Y.Map<unknown>();
+      moveMap.set(MOVE_KEY.parentId, move.parentId);
+      moveMap.set(MOVE_KEY.rank, move.rank);
+      moveMap.set(MOVE_KEY.hlc, newHlcMap(move.hlc));
+      node.set(NODE_KEY.move, moveMap);
+    },
+    'structure',
+  );
 }
 
 /** Set an item node's `deleted` register in one transaction (ADR-0011). */
 export function writeDeleted(doc: Y.Doc, id: string, del: DeletedRegister): void {
+  if (doc.getMap('meta').get('schemaVersion') === 2) {
+    if (doc.getMap('meta').get('rootId') === id) return;
+    Y.transact(
+      doc,
+      () => {
+        const node = itemsMap(doc).get(id);
+        if (!node) return;
+        let deletes = node.get('deleteRecords') as Y.Map<unknown> | undefined;
+        if (!deletes) {
+          deletes = new Y.Map();
+          node.set('deleteRecords', deletes);
+        }
+        let restores = node.get('restoreRecords') as Y.Map<unknown> | undefined;
+        if (!restores) {
+          restores = new Y.Map();
+          node.set('restoreRecords', restores);
+        }
+        if (del.isDeleted)
+          deletes.set(
+            (globalThis as unknown as { crypto: { randomUUID(): string } }).crypto.randomUUID(),
+            Date.now(),
+          );
+        else for (const token of deletes.keys()) restores.set(token, true);
+      },
+      'structure',
+    );
+    return;
+  }
   Y.transact(doc, () => {
     const node = itemsMap(doc).get(id);
     if (!node) return;
@@ -179,10 +221,14 @@ export function writeField(
   key: (typeof NODE_KEY)[keyof typeof NODE_KEY],
   value: unknown,
 ): void {
-  Y.transact(doc, () => {
-    const node = itemsMap(doc).get(id);
-    if (node) node.set(key, value);
-  });
+  Y.transact(
+    doc,
+    () => {
+      const node = itemsMap(doc).get(id);
+      if (node) node.set(key, value);
+    },
+    'structure',
+  );
 }
 
 export { ROOT_PARENT_SENTINEL };

@@ -1,4 +1,5 @@
 import {
+  deriveEffectiveTree,
   ROOT_PARENT_SENTINEL,
   isRootParent,
   computeCycleRepairs,
@@ -32,9 +33,7 @@ export interface ProjectionResult {
  * register is set OR any ancestor's is. Descendants are not tombstoned
  * individually — we filter under the nearest deleted ancestor at projection time.
  */
-function computeEffectiveDeleted(
-  snapshots: readonly ItemNodeSnapshot[],
-): Map<string, boolean> {
+function computeEffectiveDeleted(snapshots: readonly ItemNodeSnapshot[]): Map<string, boolean> {
   const byId = new Map<string, ItemNodeSnapshot>();
   for (const s of snapshots) byId.set(s.id, s);
 
@@ -73,12 +72,28 @@ export function projectSnapshots(
   snapshots: readonly ItemNodeSnapshot[],
   nowMs: number,
   replicaId: string,
+  rootId?: string,
 ): ProjectionResult {
-  const effectiveDeleted = computeEffectiveDeleted(snapshots);
+  const tree = rootId
+    ? deriveEffectiveTree(
+        snapshots.map((s) => ({
+          id: s.id,
+          parentId: s.move.parentId,
+          isDeleted: s.deleted.isDeleted,
+        })),
+        rootId,
+      )
+    : undefined;
+  const effectiveDeleted = tree
+    ? new Map(snapshots.map((s) => [s.id, tree.deleted.has(s.id)]))
+    : computeEffectiveDeleted(snapshots);
 
   const rows: ProjectedItem[] = snapshots.map((s) => ({
     id: s.id,
-    parentId: isRootParent(s.move.parentId) ? null : s.move.parentId,
+    parentId:
+      s.id === rootId || isRootParent(tree?.parents.get(s.id) ?? s.move.parentId)
+        ? null
+        : (tree?.parents.get(s.id) ?? s.move.parentId),
     rank: s.move.rank,
     type: s.type,
     content: s.content,
@@ -99,7 +114,7 @@ export function projectSnapshots(
       hlc: s.move.hlc,
     }));
 
-  const repairs = computeCycleRepairs(liveNodes, { replicaId, nowMs });
+  const repairs = tree ? [] : computeCycleRepairs(liveNodes, { replicaId, nowMs });
   return { rows, repairs };
 }
 

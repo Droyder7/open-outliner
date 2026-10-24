@@ -84,7 +84,7 @@ export interface ItemView {
 }
 
 /** Params per method. */
-export const DOCUMENT_SCHEMA_VERSION = 1;
+export const DOCUMENT_SCHEMA_VERSION = 2;
 export interface RpcParams {
   PersistDocumentUpdate: {
     documentId: string;

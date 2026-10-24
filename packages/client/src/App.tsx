@@ -1,3 +1,4 @@
+import { exportPreviousLibrary } from './offline/legacy-export.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createSession, type Session } from './session.js';
 import { Outliner } from './Outliner.js';
@@ -32,12 +33,16 @@ export function App(): JSX.Element {
   const [current, setCurrent] = useState<string>();
   const [login, setLogin] = useState(false);
   const [error, setError] = useState('');
+  const [legacy, setLegacy] = useState(false);
   const load = useCallback(async () => {
     const docs = await library.documents
       .where('accountId')
       .equals(account.id)
       .reverse()
       .sortBy('modifiedAt');
+    setLegacy(docs.some((d) => d.schemaVersion !== 2));
+    const currentDocs = docs.filter((d) => d.schemaVersion === 2);
+    docs.splice(0, docs.length, ...currentDocs);
     if (!docs.length) docs.push(await newLocalDocument(account));
     setDocuments(docs);
     setCurrent((old) => (docs.some((d) => d.id === old) ? old : docs[0]!.id));
@@ -66,6 +71,7 @@ export function App(): JSX.Element {
               accountId: account.id,
               title: remote.title,
               registered: true,
+              schemaVersion: 2,
               workspaceId,
               modifiedAt: Date.now(),
             });
@@ -112,6 +118,20 @@ export function App(): JSX.Element {
         </section>
       )}
       <StorageBanner />
+      {legacy && (
+        <p>
+          Older local documents are preserved.{' '}
+          <button
+            onClick={() =>
+              void exportPreviousLibrary(account.id).catch(() =>
+                setError('Could not export the previous library'),
+              )
+            }
+          >
+            Export previous library
+          </button>
+        </p>
+      )}
       {error && <p role="alert">{error}</p>}
       <nav aria-label="Documents">
         <select
@@ -184,7 +204,12 @@ function Document({ id, account }: { id: string; account: Account }) {
           : ''}
       </p>
       {ready && session ? (
-        <Outliner doc={session.doc} actor={session.actor} rootId={session.rootId} />
+        <Outliner
+          doc={session.doc}
+          actor={session.actor}
+          rootId={session.rootId}
+          presentationKey={`${account.id}:${id}`}
+        />
       ) : (
         <p>Opening local document…</p>
       )}

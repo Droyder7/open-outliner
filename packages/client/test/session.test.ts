@@ -62,7 +62,7 @@ describe('session duplicate-tab identity', () => {
     expect(session.actor.replicaId).toBe(freshId);
     expect(HocuspocusProvider).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        parameters: { replicaId: freshId },
+        parameters: { replicaId: freshId, schemaVersion: '2' },
       }),
     );
 

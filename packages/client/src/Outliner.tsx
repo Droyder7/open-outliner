@@ -1,10 +1,13 @@
+import { useEffect } from 'react';
+import { useMemo } from 'react';
+import { createOutlineHistory } from '@open-outliner/crdt';
 import { useCallback, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import {
   getChildren,
+  getRecoveredIds,
   getContentText,
   getContentYText,
-  getIsCollapsed,
   getIsCompleted,
   getItemType,
   getParentId,
@@ -16,14 +19,19 @@ import {
   moveWithinSiblings,
   deleteItem,
   mergeIntoPrevious,
-  setIsCollapsed,
   toggleCompleted,
   splitItem,
   ROOT_PARENT_SENTINEL,
   type Actor,
 } from '@open-outliner/crdt';
 import { RowText } from './RowText.js';
-import { CARET_END, getCaretOffset, isCaretAtEnd, isCaretAtStart, setCaretOffset } from './caret.js';
+import {
+  CARET_END,
+  getCaretOffset,
+  isCaretAtEnd,
+  isCaretAtStart,
+  setCaretOffset,
+} from './caret.js';
 
 /**
  * The outliner surface: renders the collapse-aware visible tree from the live
@@ -36,6 +44,7 @@ export interface OutlinerProps {
   readonly doc: Y.Doc;
   readonly actor: Actor;
   readonly rootId: string;
+  readonly presentationKey?: string;
 }
 
 interface PendingFocus {
@@ -43,9 +52,47 @@ interface PendingFocus {
   readonly offset: number;
 }
 
-export function Outliner({ doc, actor, rootId }: OutlinerProps): JSX.Element {
+export function Outliner({
+  doc,
+  actor,
+  rootId,
+  presentationKey = rootId,
+}: OutlinerProps): JSX.Element {
+  const history = useMemo(() => createOutlineHistory(doc), [doc]);
+  useEffect(() => () => history.stop(), [history]);
   const [, forceRender] = useReducer((n: number) => n + 1, 0);
-  const [zoomRoot, setZoomRoot] = useState<string>(rootId);
+  const [zoomRoot, setZoomRoot] = useState<string>(() => {
+    try {
+      return localStorage.getItem(`oo:zoom:${presentationKey}`) ?? rootId;
+    } catch {
+      return rootId;
+    }
+  });
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(`oo:collapse:${presentationKey}`) ?? '[]'));
+    } catch {
+      return new Set();
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(`oo:zoom:${presentationKey}`, zoomRoot);
+      localStorage.setItem(`oo:collapse:${presentationKey}`, JSON.stringify([...collapsedIds]));
+    } catch {
+      /* Editing remains available if view preferences cannot be persisted. */
+    }
+  }, [zoomRoot, collapsedIds, presentationKey]);
+  const toggleCollapse = useCallback(
+    (id: string) =>
+      setCollapsedIds((old) => {
+        const next = new Set(old);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      }),
+    [],
+  );
   const pendingFocus = useRef<PendingFocus | null>(null);
   const elements = useRef(new Map<string, HTMLElement>());
 
@@ -77,7 +124,7 @@ export function Outliner({ doc, actor, rootId }: OutlinerProps): JSX.Element {
     }
   });
 
-  const isCollapsed = useCallback((id: string) => getIsCollapsed(doc, id), [doc]);
+  const isCollapsed = useCallback((id: string) => collapsedIds.has(id), [collapsedIds]);
 
   // If the zoom target was deleted out from under us, fall back to the root.
   const effectiveZoom = getRootId(doc) && getParentId(doc, zoomRoot) ? zoomRoot : rootId;
@@ -86,6 +133,16 @@ export function Outliner({ doc, actor, rootId }: OutlinerProps): JSX.Element {
     (id: string, e: React.KeyboardEvent<HTMLDivElement>): void => {
       const el = e.currentTarget;
       const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) history.redo();
+        else history.undo();
+        forceRender();
+        const shown = flattenVisible(doc, effectiveZoom, isCollapsed);
+        const target = shown.includes(id) ? id : shown[0];
+        if (target) requestFocus(target, CARET_END);
+        return;
+      }
       const offset = getCaretOffset(el);
       const text = getContentText(doc, id);
       const visible = flattenVisible(doc, effectiveZoom, isCollapsed);
@@ -102,7 +159,7 @@ export function Outliner({ doc, actor, rootId }: OutlinerProps): JSX.Element {
           return;
         }
         const newId = crypto.randomUUID();
-        splitItem(doc, id, offset, newId, actor);
+        doc.transact(() => splitItem(doc, id, offset, newId, actor), 'structure');
         requestFocus(newId, 0);
         return;
       }
@@ -110,8 +167,8 @@ export function Outliner({ doc, actor, rootId }: OutlinerProps): JSX.Element {
       // --- Indent / outdent ---
       if (e.key === 'Tab') {
         e.preventDefault();
-        if (e.shiftKey) outdent(doc, id, actor);
-        else indent(doc, id, actor);
+        if (e.shiftKey) doc.transact(() => outdent(doc, id, actor), 'structure');
+        else doc.transact(() => indent(doc, id, actor), 'structure');
         requestFocus(id, offset);
         return;
       }
@@ -119,7 +176,10 @@ export function Outliner({ doc, actor, rootId }: OutlinerProps): JSX.Element {
       // --- Move subtree among siblings ---
       if (mod && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
         e.preventDefault();
-        moveWithinSiblings(doc, id, e.key === 'ArrowUp' ? 'up' : 'down', actor);
+        doc.transact(
+          () => moveWithinSiblings(doc, id, e.key === 'ArrowUp' ? 'up' : 'down', actor),
+          'structure',
+        );
         requestFocus(id, offset);
         return;
       }
@@ -127,7 +187,7 @@ export function Outliner({ doc, actor, rootId }: OutlinerProps): JSX.Element {
       // --- Collapse / expand ---
       if (mod && e.key === '.') {
         e.preventDefault();
-        if (hasChildren(doc, id)) setIsCollapsed(doc, id, !getIsCollapsed(doc, id));
+        if (hasChildren(doc, id)) toggleCollapse(id);
         requestFocus(id, offset);
         return;
       }
@@ -137,11 +197,11 @@ export function Outliner({ doc, actor, rootId }: OutlinerProps): JSX.Element {
         if (!prevId) return; // first visible item — no-op
         e.preventDefault();
         if (text.length === 0 && !hasChildren(doc, id)) {
-          deleteItem(doc, id, actor);
+          doc.transact(() => deleteItem(doc, id, actor), 'structure');
           requestFocus(prevId, CARET_END);
         } else {
           const joinAt = getContentText(doc, prevId).length;
-          mergeIntoPrevious(doc, id, prevId, actor);
+          doc.transact(() => mergeIntoPrevious(doc, id, prevId, actor), 'structure');
           requestFocus(prevId, joinAt);
         }
         return;
@@ -152,7 +212,7 @@ export function Outliner({ doc, actor, rootId }: OutlinerProps): JSX.Element {
         if (!nextId) return;
         e.preventDefault();
         const joinAt = text.length;
-        mergeIntoPrevious(doc, nextId, id, actor);
+        doc.transact(() => mergeIntoPrevious(doc, nextId, id, actor), 'structure');
         requestFocus(id, joinAt);
         return;
       }
@@ -182,6 +242,21 @@ export function Outliner({ doc, actor, rootId }: OutlinerProps): JSX.Element {
   );
 
   const breadcrumb = buildBreadcrumb(doc, effectiveZoom, rootId);
+  const recovery = getRecoveredIds(doc);
+  const children = getChildren(doc, effectiveZoom);
+  const renderRow = (node: { id: string }) => (
+    <Row
+      key={node.id}
+      doc={doc}
+      id={node.id}
+      depth={0}
+      isCollapsed={isCollapsed}
+      registerEl={registerEl}
+      onKeyDown={handleKeyDown}
+      onToggleCollapse={toggleCollapse}
+      onZoom={setZoomRoot}
+    />
+  );
 
   return (
     <div className="outliner">
@@ -198,20 +273,20 @@ export function Outliner({ doc, actor, rootId }: OutlinerProps): JSX.Element {
         </nav>
       )}
       <ul className="tree" role="tree">
-        {getChildren(doc, effectiveZoom).map((node) => (
-          <Row
-            key={node.id}
-            doc={doc}
-            id={node.id}
-            depth={0}
-            isCollapsed={isCollapsed}
-            registerEl={registerEl}
-            onKeyDown={handleKeyDown}
-            onToggleCollapse={(cid) => setIsCollapsed(doc, cid, !getIsCollapsed(doc, cid))}
-            onZoom={setZoomRoot}
-          />
-        ))}
+        {children.filter((node) => !recovery.has(node.id)).map(renderRow)}
       </ul>
+      {children.some((node) => recovery.has(node.id)) && (
+        <section aria-label="Recovered">
+          <h2>Recovered</h2>
+          <p>
+            These branches had a missing parent or conflicting placement. Move them to organize
+            them.
+          </p>
+          <ul className="tree" role="tree">
+            {children.filter((node) => recovery.has(node.id)).map(renderRow)}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

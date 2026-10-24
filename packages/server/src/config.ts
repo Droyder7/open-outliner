@@ -22,6 +22,7 @@ export interface ServerConfig {
   corsOrigin?: string;
   /** GC: interval between hard-delete passes (ms). Default: 60 000. */
   gcIntervalMs: number;
+  automaticGc: boolean;
   /** GC: minimum age of deleted_at before a row may be hard-deleted (ms). Default: 7 days. */
   gcRetentionMs: number;
   /** GC: prune replica_sync rows not seen for this long (ms). Default: 14 days. */
@@ -100,6 +101,7 @@ export function loadConfig(): ServerConfig {
     replicaId: env('SERVER_REPLICA_ID', randomUUID()),
     ...(corsOrigin ? { corsOrigin } : {}),
     gcIntervalMs: intEnv('GC_INTERVAL_MS', 60_000),
+    automaticGc: process.env.AUTOMATIC_GC === 'true',
     gcRetentionMs: intEnv('GC_RETENTION_MS', 7 * 24 * 60 * 60 * 1000),
     replicaStaleTtlMs: intEnv('REPLICA_STALE_TTL_MS', 14 * 24 * 60 * 60 * 1000),
     replicaNeverAckedCap: intEnv('REPLICA_NEVER_ACKED_CAP', 64),

@@ -1,5 +1,6 @@
 import * as Y from 'yjs';
 import {
+  deriveEffectiveTree,
   ROOT_PARENT_SENTINEL,
   isRootParent,
   compareOrder,
@@ -78,6 +79,8 @@ function isEffectivelyDeleted(byId: Map<string, OutlineNode>, id: string): boole
 
 /** The document's single root item id, or undefined if not yet created. */
 export function getRootId(doc: Y.Doc): string | undefined {
+  const canonical = doc.getMap('meta').get('rootId');
+  if (typeof canonical === 'string') return canonical;
   for (const [id, node] of itemsMap(doc)) {
     const move = readMove(node);
     if (move && isRootParent(move.parentId)) return id;
@@ -88,6 +91,13 @@ export function getRootId(doc: Y.Doc): string | undefined {
 /** Live (non-deleted, ancestor-non-deleted) children of `parentId`, in read order. */
 export function getChildren(doc: Y.Doc, parentId: string): OutlineNode[] {
   const nodes = allNodes(doc);
+  if (doc.getMap('meta').get('schemaVersion') === 2) {
+    const tree = deriveEffectiveTree(nodes, getRootId(doc)!);
+    return nodes
+      .filter((n) => tree.parents.get(n.id) === parentId && !tree.deleted.has(n.id))
+      .map((n) => ({ ...n, parentId: tree.parents.get(n.id)! }))
+      .sort(compareOrder);
+  }
   const byId = new Map(nodes.map((n) => [n.id, n]));
   return nodes
     .filter((n) => n.parentId === parentId && !isEffectivelyDeleted(byId, n.id))
@@ -140,7 +150,8 @@ export function insertItem(
   const siblings = getChildren(doc, parentId);
   const afterIndex = afterId ? siblings.findIndex((s) => s.id === afterId) : -1;
   const lower = afterIndex >= 0 ? siblings[afterIndex]!.rank : null;
-  const upper = afterIndex >= 0 ? (siblings[afterIndex + 1]?.rank ?? null) : (siblings[0]?.rank ?? null);
+  const upper =
+    afterIndex >= 0 ? (siblings[afterIndex + 1]?.rank ?? null) : (siblings[0]?.rank ?? null);
   const move = buildInsertMove(newId, parentId, lower, upper, undefined, ctx(actor));
   writeMove(doc, newId, move);
 }
@@ -185,7 +196,12 @@ export function outdent(doc: Y.Doc, id: string, actor: Actor): boolean {
 }
 
 /** Move an item up/down among its siblings (Cmd/Ctrl-↑↓, ADR-0017). No-op at the boundary. */
-export function moveWithinSiblings(doc: Y.Doc, id: string, direction: 'up' | 'down', actor: Actor): boolean {
+export function moveWithinSiblings(
+  doc: Y.Doc,
+  id: string,
+  direction: 'up' | 'down',
+  actor: Actor,
+): boolean {
   const node = itemsMap(doc).get(id);
   const move = node && readMove(node);
   if (!move) return false;
@@ -222,7 +238,8 @@ export function moveItem(
   const siblings = getChildren(doc, newParentId);
   const afterIndex = afterId ? siblings.findIndex((s) => s.id === afterId) : -1;
   const lower = afterIndex >= 0 ? siblings[afterIndex]!.rank : null;
-  const upper = afterIndex >= 0 ? (siblings[afterIndex + 1]?.rank ?? null) : (siblings[0]?.rank ?? null);
+  const upper =
+    afterIndex >= 0 ? (siblings[afterIndex + 1]?.rank ?? null) : (siblings[0]?.rank ?? null);
   const rank = rankBetween(lower, upper, id);
   writeMove(doc, id, buildMove(newParentId, rank, move.hlc, ctx(actor)));
   return true;
@@ -279,7 +296,13 @@ export function hasChildren(doc: Y.Doc, id: string): boolean {
  * caret; the new item (caller-provided `newId`) receives the remainder. One
  * atomic transaction — the truncation and the insert never project half-applied.
  */
-export function splitItem(doc: Y.Doc, id: string, offset: number, newId: string, actor: Actor): boolean {
+export function splitItem(
+  doc: Y.Doc,
+  id: string,
+  offset: number,
+  newId: string,
+  actor: Actor,
+): boolean {
   const node = itemsMap(doc).get(id);
   const move = node && readMove(node);
   if (!move) return false;
@@ -295,7 +318,6 @@ export function splitItem(doc: Y.Doc, id: string, offset: number, newId: string,
   });
   return true;
 }
-
 
 /** The item's content Y.Text, for a character-level collaborative text binding. */
 export function getContentYText(doc: Y.Doc, id: string): Y.Text | undefined {
@@ -361,3 +383,10 @@ export function mergeIntoPrevious(doc: Y.Doc, id: string, targetId: string, acto
 }
 
 export { ROOT_PARENT_SENTINEL };
+
+/** Root branches moved into the derived recovery location, without altering raw placements. */
+export function getRecoveredIds(doc: Y.Doc): ReadonlySet<string> {
+  return doc.getMap('meta').get('schemaVersion') === 2
+    ? deriveEffectiveTree(allNodes(doc), getRootId(doc)!).recovered
+    : new Set();
+}

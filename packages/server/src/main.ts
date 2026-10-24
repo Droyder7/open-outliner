@@ -117,9 +117,10 @@ async function main(): Promise<void> {
 
   // Tombstone-aware GC (ADR-0006 / Phase 9).
   const gcTimer = setInterval(() => {
-    void gcWorker.run().catch((err) => {
-      log(`GC pass failed: ${err instanceof Error ? err.message : String(err)}`);
-    });
+    if (config.automaticGc)
+      void gcWorker.run().catch((err) => {
+        log(`GC pass failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
   }, config.gcIntervalMs);
   gcTimer.unref();
   timers.push(gcTimer);

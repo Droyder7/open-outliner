@@ -111,7 +111,12 @@ export function createProjector(deps: ProjectorDeps): Projector {
       // plane and re-project — never attempt to upsert the cyclic state and never
       // veto at the projector. Emit repairs, persist, and recurse.
       const preSnapshots = readAllSnapshots(doc);
-      const { repairs } = projectSnapshots(preSnapshots, now(), replicaId);
+      const canonical = doc.getMap('meta').get('rootId');
+      const rootId =
+        doc.getMap('meta').get('schemaVersion') === 2 && typeof canonical === 'string'
+          ? canonical
+          : undefined;
+      const { repairs } = projectSnapshots(preSnapshots, now(), replicaId, rootId);
       if (repairs.length > 0) {
         for (const repair of repairs) applyRepair(doc, repair);
         await store.storeUpdate(documentId, Y.encodeStateAsUpdate(doc));
@@ -125,7 +130,7 @@ export function createProjector(deps: ProjectorDeps): Projector {
         if (sourceRev <= projectedRev || revision <= projectedRev) return false;
 
         const snapshots = readAllSnapshots(doc);
-        const { rows } = projectSnapshots(snapshots, now(), replicaId);
+        const { rows } = projectSnapshots(snapshots, now(), replicaId, rootId);
         const projectedIds = new Set(rows.map((r) => r.id));
 
         // Stale-replica guard (ADR-0019): a child whose parent key was removed

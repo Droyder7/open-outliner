@@ -1,3 +1,4 @@
+import { DOCUMENT_SCHEMA_VERSION } from '@open-outliner/shared';
 import { Hocuspocus } from '@hocuspocus/server';
 import { Database } from '@hocuspocus/extension-database';
 import { Forbidden } from '@hocuspocus/common';
@@ -91,6 +92,9 @@ export function createCollabServer(deps: CollabServerDeps): CollabServer {
 
   const hocuspocus = new Hocuspocus({
     async onAuthenticate(data) {
+      if (data.requestParameters.get('schemaVersion') !== String(DOCUMENT_SCHEMA_VERSION)) {
+        throw new Error('Upgrade required: incompatible document schema');
+      }
       try {
         const { userId, sessionId } = await resolveWsConnection(
           { db, sessionCookieName: deps.sessionCookieName, connectLimiter },

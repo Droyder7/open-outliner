@@ -7,6 +7,7 @@ export interface LocalDocument {
   workspaceId?: string;
   registered: boolean;
   modifiedAt: number;
+  schemaVersion?: number;
 }
 export interface PendingUpdate {
   id: string;
@@ -50,6 +51,7 @@ export async function newLocalDocument(
     accountId: account.id,
     title,
     registered: false,
+    schemaVersion: 2,
     modifiedAt: Date.now(),
     ...(account.workspaceId ? { workspaceId: account.workspaceId } : {}),
   };
