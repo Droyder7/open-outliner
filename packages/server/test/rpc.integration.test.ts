@@ -112,21 +112,37 @@ describeDb('/rpc dispatch (API, Phase 6)', () => {
     expect(root).toBeTruthy();
     expect(root?.version).toBe(1);
 
+    const legacyNote = await dispatch(
+      {
+        method: 'UpdateItem',
+        requestId: crypto.randomUUID(),
+        params: {
+          documentId,
+          id: rootItemId,
+          version: root!.version,
+          fields: { note: 'must not be accepted' },
+        },
+      },
+      ctx,
+    );
+    expect(legacyNote.response.ok).toBe(false);
+    if (!legacyNote.response.ok) expect(legacyNote.response.error.code).toBe('bad_request');
+
     const updated = await call(ctx, 'UpdateItem', {
       documentId,
       id: rootItemId,
       version: root!.version,
-      fields: { note: 'hello' },
+      fields: { color: 'blue' },
     });
     expect(updated.response.ok).toBe(true);
-    if (updated.response.ok) expect(updated.response.result.item.note).toBe('hello');
+    if (updated.response.ok) expect(updated.response.result.item.version).toBe(root!.version + 1);
 
     // Retrying with the now-stale version is a version_conflict, not a crash.
     const stale = await call(ctx, 'UpdateItem', {
       documentId,
       id: rootItemId,
       version: root!.version,
-      fields: { note: 'stale write' },
+      fields: { color: 'red' },
     });
     expect(stale.response.ok).toBe(false);
     if (!stale.response.ok) expect(stale.response.error.code).toBe('version_conflict');
@@ -135,7 +151,7 @@ describeDb('/rpc dispatch (API, Phase 6)', () => {
       documentId,
       id: crypto.randomUUID(),
       version: 1,
-      fields: { note: 'x' },
+      fields: { color: 'red' },
     });
     expect(missing.response.ok).toBe(false);
     if (!missing.response.ok) expect(missing.response.error.code).toBe('not_found');

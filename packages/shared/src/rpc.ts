@@ -94,7 +94,6 @@ export interface RpcParams {
     id: string;
     version: number;
     fields: Partial<{
-      note: string | null;
       color: string | null;
       metadata: Record<string, unknown>;
     }>;

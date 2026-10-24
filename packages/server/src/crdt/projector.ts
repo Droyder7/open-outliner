@@ -104,7 +104,7 @@ export function createProjector(deps: ProjectorDeps): Projector {
   async function projectDocument(documentId: string): Promise<boolean> {
     // Load merged state OUTSIDE the lock (read-only replay); the lock only guards
     // the revision compare + upserts so passes serialize but reads don't block.
-    const doc = await store.loadDocument(documentId);
+    const { doc, revision } = await store.loadDocumentSnapshot(documentId);
     try {
       // Detect cycles FIRST (ADR-0012). A cyclic projection can never satisfy the
       // same-document parent FK in any upsert order, so we must repair the CRDT
@@ -122,7 +122,7 @@ export function createProjector(deps: ProjectorDeps): Projector {
       return await withDocumentLock(db, documentId, async (tx) => {
         const { sourceRev, projectedRev } = await readRevisions(tx, documentId);
         // Monotonic guard: only project if this pass advances the revision.
-        if (sourceRev <= projectedRev) return false;
+        if (sourceRev <= projectedRev || revision <= projectedRev) return false;
 
         const snapshots = readAllSnapshots(doc);
         const { rows } = projectSnapshots(snapshots, now(), replicaId);
@@ -161,7 +161,7 @@ export function createProjector(deps: ProjectorDeps): Projector {
         await tx.query(
           `UPDATE document_projection SET projected_rev = $2, updated_at = now()
             WHERE document_id = $1`,
-          [documentId, sourceRev],
+          [documentId, revision],
         );
         return true;
       });

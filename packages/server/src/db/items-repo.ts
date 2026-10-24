@@ -71,43 +71,7 @@ export async function upsertProjectedItem(
   documentId: string,
   item: ProjectedItem,
 ): Promise<void> {
-  await tx.query(
-    `INSERT INTO items
-       (id, document_id, parent_id, rank, type, content, note,
-        is_completed, is_collapsed, deleted_at, version, updated_at)
-     VALUES
-       ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-        CASE WHEN $10 THEN now() ELSE NULL END, 1, now())
-     ON CONFLICT (id) DO UPDATE SET
-        parent_id    = EXCLUDED.parent_id,
-        rank         = EXCLUDED.rank,
-        type         = EXCLUDED.type,
-        content      = EXCLUDED.content,
-        note         = EXCLUDED.note,
-        is_completed = EXCLUDED.is_completed,
-        is_collapsed = EXCLUDED.is_collapsed,
-        -- Flip deleted_at only on transition: set when tombstoning for the first
-        -- time, clear on undo, otherwise preserve the existing timestamp.
-        deleted_at   = CASE
-                         WHEN $10 AND items.deleted_at IS NULL THEN now()
-                         WHEN NOT $10 THEN NULL
-                         ELSE items.deleted_at
-                       END,
-        version      = items.version + 1,
-        updated_at   = now()`,
-    [
-      item.id,
-      documentId,
-      item.parentId,
-      item.rank,
-      item.type,
-      item.content,
-      item.note,
-      item.isCompleted,
-      item.isCollapsed,
-      item.deleted,
-    ],
-  );
+  await upsertProjectedItemsBatch(tx, documentId, [item]);
 }
 
 /**
@@ -134,6 +98,22 @@ export async function upsertProjectedItemsBatch(
 ): Promise<void> {
   if (items.length === 0) return;
   const ids = items.map((i) => i.id);
+  const foreign = await tx.query(
+    `SELECT id FROM items WHERE id = ANY($1::uuid[]) AND document_id <> $2`,
+    [ids, documentId],
+  );
+  if (foreign.rows.length) throw new Error('Item identity belongs to another document');
+  // Serialize concurrent first claims of the same UUID across documents.
+  await tx.query(
+    `SELECT pg_advisory_xact_lock(hashtext('item:' || id::text))
+                    FROM (SELECT DISTINCT unnest($1::uuid[]) AS id ORDER BY id) keys`,
+    [ids],
+  );
+  const recheck = await tx.query(
+    `SELECT id FROM items WHERE id = ANY($1::uuid[]) AND document_id <> $2`,
+    [ids, documentId],
+  );
+  if (recheck.rows.length) throw new Error('Item identity belongs to another document');
   const parentIds = items.map((i) => i.parentId);
   const ranks = items.map((i) => i.rank);
   const types = items.map((i) => i.type);
@@ -172,7 +152,7 @@ export async function upsertProjectedItemsBatch(
                        END,
         version      = items.version + 1,
         updated_at   = now()
-     WHERE
+     WHERE items.document_id = $1 AND (
         items.parent_id IS DISTINCT FROM EXCLUDED.parent_id
         OR items.rank IS DISTINCT FROM EXCLUDED.rank
         OR items.type IS DISTINCT FROM EXCLUDED.type
@@ -181,19 +161,9 @@ export async function upsertProjectedItemsBatch(
         OR items.is_completed IS DISTINCT FROM EXCLUDED.is_completed
         OR items.is_collapsed IS DISTINCT FROM EXCLUDED.is_collapsed
         OR (EXCLUDED.deleted_at IS NOT NULL AND items.deleted_at IS NULL)
-        OR (EXCLUDED.deleted_at IS NULL AND items.deleted_at IS NOT NULL)`,
-    [
-      documentId,
-      ids,
-      parentIds,
-      ranks,
-      types,
-      contents,
-      notes,
-      completed,
-      collapsed,
-      deleted,
-    ],
+        OR (EXCLUDED.deleted_at IS NULL AND items.deleted_at IS NOT NULL))
+     RETURNING id`,
+    [documentId, ids, parentIds, ranks, types, contents, notes, completed, collapsed, deleted],
   );
 }
 
@@ -231,7 +201,6 @@ export async function getSubtree(
 
 /** Pure metadata update via the API path with optimistic concurrency (version). */
 export interface MetadataUpdate {
-  note?: string | null;
   color?: string | null;
   metadata?: Record<string, unknown>;
 }
@@ -250,9 +219,8 @@ export async function updateItemMetadata(
 ): Promise<ItemRow | null> {
   const res = await db.query<ItemRow>(
     `UPDATE items SET
-        note     = COALESCE($4, note),
-        color    = COALESCE($5, color),
-        metadata = COALESCE($6, metadata),
+        color    = COALESCE($4, color),
+        metadata = COALESCE($5, metadata),
         version  = version + 1,
         updated_at = now()
       WHERE document_id = $1 AND id = $2 AND version = $3 AND deleted_at IS NULL
@@ -262,7 +230,6 @@ export async function updateItemMetadata(
       documentId,
       id,
       expectedVersion,
-      fields.note ?? null,
       fields.color ?? null,
       fields.metadata ? JSON.stringify(fields.metadata) : null,
     ],

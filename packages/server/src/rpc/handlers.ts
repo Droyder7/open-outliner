@@ -200,6 +200,12 @@ export const handlers: { [M in RpcMethod]: RpcHandler<M> } = {
   },
 
   async UpdateItem(params, ctx) {
+    if (params.fields && Object.hasOwn(params.fields, 'note')) {
+      throw new RpcHandlerError(
+        'bad_request',
+        'Notes must be edited through document synchronization',
+      );
+    }
     const { userId } = requireSession(ctx);
     await requireDocumentAccess(ctx, params.documentId, userId);
     const updated = await updateItemMetadata(
@@ -313,10 +319,7 @@ export const handlers: { [M in RpcMethod]: RpcHandler<M> } = {
       checksum,
     );
     if (!row) {
-      throw new RpcHandlerError(
-        'not_found',
-        'Attachment not found, already finalized, or deleted',
-      );
+      throw new RpcHandlerError('not_found', 'Attachment not found, already finalized, or deleted');
     }
 
     const view: AttachmentView = {

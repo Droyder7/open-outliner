@@ -45,8 +45,8 @@ Use exactly one of these stages for each row:
 | ID | Part | Stage | Evidence / next step |
 |---|---|---|---|
 | PF-0 | Baseline and specifications | Verified | [Review](architecture-review.md), [plan](personal-first-plan.md), ADR-0021; no supplied user datastore and no destructive reset performed. |
-| PF-1 | Persistence correctness and isolation | In progress | Add deterministic compaction/projection/isolation regressions before later milestones. |
-| PF-2 | Offline boot and durable receipts | Ready | Implement browser catalog and pending-update durability. |
+| PF-1 | Persistence correctness and isolation | Verified | Committed generation snapshots; exact-ID compaction; scoped identity claims; note writes rejected by RPC. PostgreSQL safety regressions and server suite pass (S3-only tests deferred to PF-6). |
+| PF-2 | Offline boot and durable receipts | In progress | Implement browser catalog and pending-update durability. |
 | PF-3 | Tree semantics and recovery | Ready | Schema v2 and shared effective tree. |
 | PF-4 | Responsive large outlines | Ready | Browser latency gates in plan. |
 | PF-5 | Personal workflow | Ready | Navigation, search, trash, checkpoints and portable export. |

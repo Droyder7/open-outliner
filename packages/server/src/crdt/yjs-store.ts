@@ -7,8 +7,8 @@ import type { Db } from '../db/db.js';
  * The durable-ack rule: an update is only considered received once it is durably
  * committed here. The store is replay-tolerant (Yjs merge is idempotent), so no
  * per-update dedup or ordering check is needed — duplicates cost only load time,
- * which compaction (Phase 12) bounds. `source_rev` advances on every persisted
- * update (the max `yjs_updates.id`), driving the projection revision guard
+ * which compaction (Phase 12) bounds. `source_rev` advances on every committed
+ * update (a per-document generation, independent of row allocation order), driving the projection revision guard
  * (ADR-0013).
  *
  * This module is transport-agnostic: the Hocuspocus Database extension calls
@@ -16,7 +16,14 @@ import type { Db } from '../db/db.js';
  * spine proof).
  */
 
+export interface DocumentSnapshot {
+  doc: Y.Doc;
+  /** Per-document committed generation, read in the same SQL snapshot as updates. */
+  revision: number;
+}
+
 export interface YjsStore {
+  loadDocumentSnapshot(documentId: string, strict?: boolean): Promise<DocumentSnapshot>;
   /**
    * Durably persist one incremental update and advance the document's
    * `source_rev` in the SAME transaction, so an acked update is always reflected
@@ -41,13 +48,13 @@ export function createYjsStore(db: Db, log: (msg: string) => void = () => {}): Y
           documentId,
           Buffer.from(update),
         ]);
-        // source_rev = max yjs_updates.id applied. Upsert the projection row so a
+        // Advance a committed generation. Upsert the projection row so a
         // brand-new document (no createDocument seed) still tracks correctly.
         const res = await tx.query<{ source_rev: string }>(
           `INSERT INTO document_projection (document_id, source_rev, projected_rev)
-           VALUES ($1, (SELECT COALESCE(max(id), 0) FROM yjs_updates WHERE document_id = $1), 0)
+           VALUES ($1, 1, 0)
            ON CONFLICT (document_id) DO UPDATE
-             SET source_rev = (SELECT COALESCE(max(id), 0) FROM yjs_updates WHERE document_id = $1),
+             SET source_rev = document_projection.source_rev + 1,
                  updated_at = now()
            RETURNING source_rev`,
           [documentId],
@@ -65,24 +72,32 @@ export function createYjsStore(db: Db, log: (msg: string) => void = () => {}): Y
     },
 
     async loadDocument(documentId) {
-      const res = await db.query<{ update: Buffer }>(
-        `SELECT update FROM yjs_updates WHERE document_id = $1 ORDER BY id ASC`,
+      return (await this.loadDocumentSnapshot(documentId, false)).doc;
+    },
+
+    async loadDocumentSnapshot(documentId, strict = true) {
+      // One statement: rows and generation must describe the same MVCC snapshot.
+      const res = await db.query<{ update: Buffer; revision: string }>(
+        `SELECT u.update, p.source_rev AS revision
+           FROM yjs_updates u JOIN document_projection p ON p.document_id = u.document_id
+          WHERE u.document_id = $1 ORDER BY u.id ASC`,
         [documentId],
       );
       const doc = new Y.Doc();
-      for (const row of res.rows) {
-        try {
-          Y.applyUpdate(doc, new Uint8Array(row.update));
-        } catch (err) {
-          // Corruption tolerance (ADR-0015): skip the bad row, keep the room.
-          log(
-            `skipping corrupt yjs_updates row for ${documentId}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
+      try {
+        for (const row of res.rows) {
+          try {
+            Y.applyUpdate(doc, new Uint8Array(row.update));
+          } catch (err) {
+            log(`corrupt yjs_updates row for ${documentId}: ${String(err)}`);
+            if (strict) throw err;
+          }
         }
+        return { doc, revision: Number(res.rows[0]?.revision ?? 0) };
+      } catch (err) {
+        doc.destroy();
+        throw err;
       }
-      return doc;
     },
   };
 }

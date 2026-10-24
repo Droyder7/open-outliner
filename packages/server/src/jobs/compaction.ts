@@ -59,31 +59,37 @@ export function createCompactionWorker(db: Db, config: CompactionConfig = {}): C
     if (count <= threshold) return false;
 
     return withDocumentLock(db, documentId, async (tx) => {
-      const res = await tx.query<{ update: Buffer }>(
-        `SELECT update FROM yjs_updates WHERE document_id = $1 ORDER BY id ASC`,
+      const res = await tx.query<{ id: string; update: Buffer }>(
+        `SELECT id, update FROM yjs_updates WHERE document_id = $1 ORDER BY id ASC`,
         [documentId],
       );
       if (res.rows.length <= threshold) return false;
 
       const doc = new Y.Doc();
-      for (const row of res.rows) {
-        try {
-          Y.applyUpdate(doc, new Uint8Array(row.update));
-        } catch {
-          // skip corrupt rows
-        }
+      let snapshot: Uint8Array;
+      try {
+        // Fail closed: never truncate input which did not decode successfully.
+        for (const row of res.rows) Y.applyUpdate(doc, new Uint8Array(row.update));
+        snapshot = Y.encodeStateAsUpdate(doc);
+      } finally {
+        doc.destroy();
       }
-      const snapshot = Y.encodeStateAsUpdate(doc);
-      doc.destroy();
-
-      // Replace all incremental updates with the single snapshot, atomically.
-      // The advisory lock ensures no concurrent storeUpdate or projector pass
-      // races this truncation + insert.
-      await tx.query(`DELETE FROM yjs_updates WHERE document_id = $1`, [documentId]);
+      // Writers do not take this lock. Delete only rows covered by the snapshot;
+      // later commits (even with lower allocated IDs) need special care: retain
+      // an exact ID set rather than deleting a numeric range.
+      await tx.query(`DELETE FROM yjs_updates WHERE document_id = $1 AND id = ANY($2::bigint[])`, [
+        documentId,
+        res.rows.map((row) => row.id),
+      ]);
       await tx.query(`INSERT INTO yjs_updates (document_id, update) VALUES ($1, $2)`, [
         documentId,
         Buffer.from(snapshot),
       ]);
+      await tx.query(
+        `UPDATE document_projection SET source_rev = source_rev + 1, updated_at = now()
+                       WHERE document_id = $1`,
+        [documentId],
+      );
 
       log(`compacted ${res.rows.length} updates → 1 snapshot for ${documentId}`);
       return true;
