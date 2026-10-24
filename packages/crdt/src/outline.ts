@@ -63,20 +63,6 @@ function allNodes(doc: Y.Doc): OutlineNode[] {
   return out;
 }
 
-/** Effective-deleted check under the lazy tombstone rule (ADR-0006/0011). */
-function isEffectivelyDeleted(byId: Map<string, OutlineNode>, id: string): boolean {
-  const seen = new Set<string>();
-  let cur = byId.get(id);
-  while (cur) {
-    if (seen.has(cur.id)) return false; // cycle guard
-    seen.add(cur.id);
-    if (cur.isDeleted) return true;
-    if (isRootParent(cur.parentId)) return false;
-    cur = byId.get(cur.parentId);
-  }
-  return false;
-}
-
 /** The document's single root item id, or undefined if not yet created. */
 export function getRootId(doc: Y.Doc): string | undefined {
   const canonical = doc.getMap('meta').get('rootId');
@@ -89,19 +75,49 @@ export function getRootId(doc: Y.Doc): string | undefined {
 }
 
 /** Live (non-deleted, ancestor-non-deleted) children of `parentId`, in read order. */
-export function getChildren(doc: Y.Doc, parentId: string): OutlineNode[] {
-  const nodes = allNodes(doc);
-  if (doc.getMap('meta').get('schemaVersion') === 2) {
-    const tree = deriveEffectiveTree(nodes, getRootId(doc)!);
-    return nodes
-      .filter((n) => tree.parents.get(n.id) === parentId && !tree.deleted.has(n.id))
-      .map((n) => ({ ...n, parentId: tree.parents.get(n.id)! }))
-      .sort(compareOrder);
+interface OutlineIndex {
+  nodes: Map<string, OutlineNode>;
+  children: Map<string, OutlineNode[]>;
+  recovered: Set<string>;
+  dirty: boolean;
+}
+const indexes = new WeakMap<Y.Doc, OutlineIndex>();
+function outlineIndex(doc: Y.Doc): OutlineIndex {
+  let index = indexes.get(doc);
+  if (!index) {
+    index = { nodes: new Map(), children: new Map(), recovered: new Set(), dirty: true };
+    indexes.set(doc, index);
+    doc.on('afterTransaction', (transaction: Y.Transaction) => {
+      if ([...transaction.changed.keys()].some((type) => !(type instanceof Y.Text)))
+        index!.dirty = true;
+    });
   }
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  return nodes
-    .filter((n) => n.parentId === parentId && !isEffectivelyDeleted(byId, n.id))
-    .sort(compareOrder);
+  // During a compound command, read the current transactional tree rather than
+  // a cached pre-command placement. Outside transactions, reuse the index.
+  if (!index.dirty && !doc._transaction) return index;
+  const nodes = allNodes(doc);
+  const root = getRootId(doc);
+  const tree = deriveEffectiveTree(nodes, root ?? '');
+  index.nodes = new Map(
+    nodes.map((n) => [n.id, { ...n, parentId: tree.parents.get(n.id) ?? n.parentId }]),
+  );
+  index.children = new Map();
+  index.recovered = tree.recovered;
+  for (const node of index.nodes.values()) {
+    if (tree.deleted.has(node.id) || node.id === root) continue;
+    let children = index.children.get(node.parentId);
+    if (!children) {
+      children = [];
+      index.children.set(node.parentId, children);
+    }
+    children.push(node);
+  }
+  for (const children of index.children.values()) children.sort(compareOrder);
+  index.dirty = false;
+  return index;
+}
+export function getChildren(doc: Y.Doc, parentId: string): OutlineNode[] {
+  return outlineIndex(doc).children.get(parentId)?.slice() ?? [];
 }
 
 /** The flattened, collapse-aware visible order used by caret nav / multi-select (ADR-0017). */
@@ -111,13 +127,16 @@ export function flattenVisible(
   isCollapsed: (id: string) => boolean,
 ): string[] {
   const out: string[] = [];
-  function walk(parentId: string): void {
-    for (const child of getChildren(doc, parentId)) {
-      out.push(child.id);
-      if (!isCollapsed(child.id)) walk(child.id);
+  const children = outlineIndex(doc).children;
+  const stack = [...(children.get(rootId) ?? [])].reverse();
+  while (stack.length) {
+    const node = stack.pop()!;
+    out.push(node.id);
+    if (!isCollapsed(node.id)) {
+      const nested = children.get(node.id) ?? [];
+      for (let i = nested.length - 1; i >= 0; i--) stack.push(nested[i]!);
     }
   }
-  walk(rootId);
   return out;
 }
 
@@ -282,7 +301,7 @@ export function getContentText(doc: Y.Doc, id: string): string {
 export function getParentId(doc: Y.Doc, id: string): string | undefined {
   const node = itemsMap(doc).get(id);
   const move = node && readMove(node);
-  return move ? move.parentId : undefined;
+  return outlineIndex(doc).nodes.get(id)?.parentId ?? (move ? move.parentId : undefined);
 }
 
 /** True iff the item has at least one live child. */
@@ -386,7 +405,30 @@ export { ROOT_PARENT_SENTINEL };
 
 /** Root branches moved into the derived recovery location, without altering raw placements. */
 export function getRecoveredIds(doc: Y.Doc): ReadonlySet<string> {
-  return doc.getMap('meta').get('schemaVersion') === 2
-    ? deriveEffectiveTree(allNodes(doc), getRootId(doc)!).recovered
-    : new Set();
+  return outlineIndex(doc).recovered;
+}
+
+export interface VisibleRow {
+  id: string;
+  depth: number;
+  recovered: boolean;
+}
+export function visibleRows(
+  doc: Y.Doc,
+  rootId: string,
+  isCollapsed: (id: string) => boolean,
+): VisibleRow[] {
+  const index = outlineIndex(doc);
+  const out: VisibleRow[] = [];
+  const stack = (index.children.get(rootId) ?? []).map((node) => ({ node, depth: 0 })).reverse();
+  while (stack.length) {
+    const { node, depth } = stack.pop()!;
+    out.push({ id: node.id, depth, recovered: index.recovered.has(node.id) });
+    if (!isCollapsed(node.id)) {
+      const children = index.children.get(node.id) ?? [];
+      for (let i = children.length - 1; i >= 0; i--)
+        stack.push({ node: children[i]!, depth: depth + 1 });
+    }
+  }
+  return out;
 }

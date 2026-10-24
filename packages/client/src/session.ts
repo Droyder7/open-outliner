@@ -115,6 +115,26 @@ export function createSession(documentId: string, options: SessionOptions = {}):
     doc,
   );
 
+  // Same-account tabs share live updates as well as storage. IndexedDB alone
+  // is not a broadcast transport for independently loaded Y.Docs.
+  const peer =
+    options.accountId && typeof BroadcastChannel !== 'undefined'
+      ? new BroadcastChannel(`oo:doc:${options.accountId}:${documentId}`)
+      : undefined;
+  if (peer) {
+    peer.onmessage = (event) => {
+      if (event.data?.kind === 'request')
+        peer.postMessage({ kind: 'update', bytes: Y.encodeStateAsUpdate(doc) });
+      else if (event.data?.bytes instanceof Uint8Array)
+        Y.applyUpdate(doc, event.data.bytes, 'peer');
+    };
+    peer.postMessage({ kind: 'request' });
+  }
+  const broadcast = (bytes: Uint8Array, origin: unknown) => {
+    if (origin !== 'peer' && origin !== idb && origin !== 'remote')
+      peer?.postMessage({ kind: 'update', bytes });
+  };
+  doc.on('update', broadcast);
   const syncUrl = options.realtime === false ? undefined : import.meta.env.VITE_SYNC_URL;
   // The replica id the sync connection identifies as. Starts as the tab's id
   // and is replaced (with the connection) at most once, if this tab loses the
@@ -195,6 +215,8 @@ export function createSession(documentId: string, options: SessionOptions = {}):
       }
     }),
     destroy() {
+      peer?.close();
+      doc.off('update', broadcast);
       claim?.stop();
       provider?.destroy();
       void idb.destroy();

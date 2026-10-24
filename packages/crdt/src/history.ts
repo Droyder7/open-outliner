@@ -1,3 +1,4 @@
+import { trackItemChanges } from './change-tracking.js';
 import * as Y from 'yjs';
 import { itemsMap, readNodeSnapshot, writeMove, writeDeleted, writeField } from './yjs-node.js';
 import type { ItemNodeSnapshot } from '@open-outliner/shared';
@@ -13,35 +14,44 @@ export function createOutlineHistory(doc: Y.Doc) {
   const undo: Action[] = [];
   const redo: Action[] = [];
   let replaying = false;
-  let before: Map<string, ItemNodeSnapshot> | undefined;
+  let before: Map<string, ItemNodeSnapshot | undefined> | undefined;
   let textBefore = 0;
-  const snapshot = () =>
-    new Map(
-      [...itemsMap(doc)].flatMap(([id, node]) => {
-        const s = readNodeSnapshot(id, node);
-        return s ? [[id, s] as const] : [];
-      }),
-    );
+  const untrack = trackItemChanges(doc, (id) => {
+    if (!before || replaying || before.has(id)) return;
+    const node = itemsMap(doc).get(id);
+    before.set(id, node ? readNodeSnapshot(id, node) : undefined);
+  });
   const scopes = new Set<Y.Text>();
-  const watchText = () => {
-    for (const node of itemsMap(doc).values())
-      for (const value of node.values())
-        if (value instanceof Y.Text && !scopes.has(value)) {
-          scopes.add(value);
-          manager.addToScope(value);
-        }
+  const addTexts = (node: Y.Map<unknown>) => {
+    for (const value of node.values())
+      if (value instanceof Y.Text && !scopes.has(value)) {
+        scopes.add(value);
+        manager.addToScope(value);
+      }
   };
-  watchText();
+  for (const node of itemsMap(doc).values()) addTexts(node);
   const begin = (transaction: Y.Transaction) => {
     if (!replaying && transaction.origin === 'structure') {
-      before = snapshot();
+      before = new Map();
       textBefore = manager.undoStack.length;
     }
   };
   const end = (transaction: Y.Transaction) => {
-    watchText();
+    for (const [type, keys] of transaction.changed) {
+      if ((type as unknown) === itemsMap(doc))
+        for (const id of keys) {
+          const node = id ? itemsMap(doc).get(id) : undefined;
+          if (node) addTexts(node);
+        }
+      else if (type instanceof Y.Map) addTexts(type);
+    }
     if (!replaying && transaction.origin === 'structure' && before) {
-      const after = snapshot();
+      const after = new Map(
+        [...before.keys()].map((id) => {
+          const node = itemsMap(doc).get(id);
+          return [id, node ? readNodeSnapshot(id, node) : undefined] as const;
+        }),
+      );
       const changes: Change[] = [];
       for (const id of new Set([...before.keys(), ...after.keys()])) {
         const a = before.get(id),
@@ -126,6 +136,7 @@ export function createOutlineHistory(doc: Y.Doc) {
     stop() {
       doc.off('beforeTransaction', begin);
       doc.off('afterTransaction', end);
+      untrack();
       manager.destroy();
     },
   };

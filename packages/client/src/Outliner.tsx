@@ -2,10 +2,12 @@ import { useEffect } from 'react';
 import { useMemo } from 'react';
 import { createOutlineHistory } from '@open-outliner/crdt';
 import { useCallback, useLayoutEffect, useReducer, useRef, useState } from 'react';
-import type * as Y from 'yjs';
+import * as Y from 'yjs';
+import { memo } from 'react';
 import {
   getChildren,
   getRecoveredIds,
+  visibleRows,
   getContentText,
   getContentYText,
   getIsCompleted,
@@ -52,7 +54,7 @@ interface PendingFocus {
   readonly offset: number;
 }
 
-export function Outliner({
+function OutlinerView({
   doc,
   actor,
   rootId,
@@ -60,7 +62,7 @@ export function Outliner({
 }: OutlinerProps): JSX.Element {
   const history = useMemo(() => createOutlineHistory(doc), [doc]);
   useEffect(() => () => history.stop(), [history]);
-  const [, forceRender] = useReducer((n: number) => n + 1, 0);
+  const [revision, forceRender] = useReducer((n: number) => n + 1, 0);
   const [zoomRoot, setZoomRoot] = useState<string>(() => {
     try {
       return localStorage.getItem(`oo:zoom:${presentationKey}`) ?? rootId;
@@ -95,12 +97,17 @@ export function Outliner({
   );
   const pendingFocus = useRef<PendingFocus | null>(null);
   const elements = useRef(new Map<string, HTMLElement>());
+  const viewport = useRef<HTMLDivElement>(null);
+  const visibleIds = useRef<string[]>([]);
+  const [scrollTop, setScrollTop] = useState(0);
 
   // Re-render on any (local or remote) document change.
   useLayoutEffect(() => {
-    const onChange = (): void => forceRender();
-    doc.on('afterAllTransactions', onChange);
-    return () => doc.off('afterAllTransactions', onChange);
+    const onChange = (transaction: Y.Transaction): void => {
+      if ([...transaction.changed.keys()].some((type) => !(type instanceof Y.Text))) forceRender();
+    };
+    doc.on('afterTransaction', onChange);
+    return () => doc.off('afterTransaction', onChange);
   }, [doc]);
 
   const registerEl = useCallback((id: string, el: HTMLElement | null) => {
@@ -121,6 +128,12 @@ export function Outliner({
     if (el) {
       setCaretOffset(el, pf.offset === CARET_END ? (el.textContent?.length ?? 0) : pf.offset);
       pendingFocus.current = null;
+    } else {
+      const index = visibleIds.current.indexOf(pf.id);
+      if (index >= 0 && viewport.current) {
+        viewport.current.scrollTop = Math.max(0, index * 36 - 180);
+        setScrollTop(viewport.current.scrollTop);
+      }
     }
   });
 
@@ -243,20 +256,13 @@ export function Outliner({
 
   const breadcrumb = buildBreadcrumb(doc, effectiveZoom, rootId);
   const recovery = getRecoveredIds(doc);
-  const children = getChildren(doc, effectiveZoom);
-  const renderRow = (node: { id: string }) => (
-    <Row
-      key={node.id}
-      doc={doc}
-      id={node.id}
-      depth={0}
-      isCollapsed={isCollapsed}
-      registerEl={registerEl}
-      onKeyDown={handleKeyDown}
-      onToggleCollapse={toggleCollapse}
-      onZoom={setZoomRoot}
-    />
+  const rows = useMemo(
+    () => visibleRows(doc, effectiveZoom, isCollapsed),
+    [doc, effectiveZoom, isCollapsed, revision],
   );
+  visibleIds.current = rows.map((row) => row.id);
+  const start = Math.max(0, Math.floor(scrollTop / 36) - 8);
+  const end = Math.min(rows.length, start + 32);
 
   return (
     <div className="outliner">
@@ -272,29 +278,50 @@ export function Outliner({
           ))}
         </nav>
       )}
-      <ul className="tree" role="tree">
-        {children.filter((node) => !recovery.has(node.id)).map(renderRow)}
-      </ul>
-      {children.some((node) => recovery.has(node.id)) && (
-        <section aria-label="Recovered">
-          <h2>Recovered</h2>
-          <p>
-            These branches had a missing parent or conflicting placement. Move them to organize
-            them.
-          </p>
-          <ul className="tree" role="tree">
-            {children.filter((node) => recovery.has(node.id)).map(renderRow)}
-          </ul>
-        </section>
+      {recovery.size > 0 && (
+        <p role="note">Recovered branches are marked below. Move them to organize them.</p>
       )}
+      <div
+        className="outline-scroll"
+        ref={viewport}
+        onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+      >
+        <ul
+          className="tree virtual-tree"
+          role="tree"
+          style={{ height: Math.max(rows.length * 36, 36) }}
+        >
+          {rows.slice(start, end).map((node, index) => (
+            <Row
+              key={node.id}
+              doc={doc}
+              id={node.id}
+              depth={node.depth}
+              index={start + index}
+              recovered={node.recovered}
+              revision={revision}
+              isCollapsed={isCollapsed}
+              registerEl={registerEl}
+              onKeyDown={handleKeyDown}
+              onToggleCollapse={toggleCollapse}
+              onZoom={setZoomRoot}
+            />
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
+
+export const Outliner = memo(OutlinerView);
 
 interface RowProps {
   readonly doc: Y.Doc;
   readonly id: string;
   readonly depth: number;
+  readonly index: number;
+  readonly recovered: boolean;
+  readonly revision: number;
   isCollapsed(id: string): boolean;
   registerEl(id: string, el: HTMLElement | null): void;
   onKeyDown(id: string, e: React.KeyboardEvent<HTMLDivElement>): void;
@@ -302,10 +329,12 @@ interface RowProps {
   onZoom(id: string): void;
 }
 
-function Row({
+const Row = memo(function Row({
   doc,
   id,
   depth,
+  index,
+  recovered,
   isCollapsed,
   registerEl,
   onKeyDown,
@@ -320,10 +349,17 @@ function Row({
   const expandable = children.length > 0;
 
   return (
-    <li className="row-wrap" role="treeitem" aria-expanded={expandable ? !collapsed : undefined}>
+    <li
+      className="row-wrap virtual-row"
+      data-item-id={id}
+      role="treeitem"
+      aria-level={depth + 1}
+      style={{ position: 'absolute', top: index * 36, left: 0, right: 0, height: 36 }}
+      aria-expanded={expandable ? !collapsed : undefined}
+    >
       <div
         className={`row type-${type}${completed ? ' completed' : ''}`}
-        style={{ paddingLeft: `${depth * 22}px` }}
+        style={{ paddingLeft: `${Math.min(depth, 10) * 22}px` }}
       >
         <button
           className={`collapse ${expandable ? (collapsed ? 'collapsed' : 'expanded') : 'leaf'}`}
@@ -336,6 +372,7 @@ function Row({
         <button className="bullet" onClick={() => onZoom(id)} aria-label="Zoom in" tabIndex={-1}>
           •
         </button>
+        {recovered && <span className="recovered-label">Recovered</span>}
         {text ? (
           <RowText
             id={id}
@@ -348,26 +385,9 @@ function Row({
           <span className="row-text" />
         )}
       </div>
-      {expandable && !collapsed && (
-        <ul className="tree" role="group">
-          {children.map((child) => (
-            <Row
-              key={child.id}
-              doc={doc}
-              id={child.id}
-              depth={depth + 1}
-              isCollapsed={isCollapsed}
-              registerEl={registerEl}
-              onKeyDown={onKeyDown}
-              onToggleCollapse={onToggleCollapse}
-              onZoom={onZoom}
-            />
-          ))}
-        </ul>
-      )}
     </li>
   );
-}
+});
 
 interface Crumb {
   readonly id: string;

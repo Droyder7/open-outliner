@@ -116,3 +116,18 @@ test('structural undo and redo keep the original text recoverable', async ({ pag
   await page.keyboard.press('Control+Shift+z');
   await expect(page.getByRole('textbox')).toHaveCount(2);
 });
+
+test('two offline tabs keep their local document in sync', async ({ page, context }) => {
+  await page.goto('/');
+  await page.getByRole('textbox').first().fill('From the first tab');
+  await expect(page.getByRole('status')).toContainText('Saved locally');
+  const second = await context.newPage();
+  await second.goto('/');
+  await expect(second.getByRole('textbox').first()).toHaveText('From the first tab');
+  await second.getByRole('textbox').first().fill('From the second tab');
+  await expect(page.getByRole('textbox').first()).toHaveText('From the second tab');
+  await expect(second.getByRole('status')).toContainText('Saved locally');
+  await second.close();
+  await page.reload();
+  await expect(page.getByRole('textbox').first()).toHaveText('From the second tab');
+});

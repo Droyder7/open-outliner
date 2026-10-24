@@ -4,8 +4,7 @@
   --muted: #8b949e;
   --accent: #0969da;
   --border: #d0d7de;
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
 * {
@@ -243,7 +242,6 @@ body {
   margin-bottom: 12px;
 }
 
-
 .error-boundary {
   max-width: 720px;
   margin: 48px auto;
@@ -259,4 +257,34 @@ body {
   background: rgba(0, 0, 0, 0.05);
   padding: 12px;
   border-radius: 6px;
+}
+
+.outline-scroll {
+  height: 480px;
+  max-height: 70vh;
+  overflow: auto;
+  position: relative;
+}
+.virtual-tree {
+  position: relative;
+}
+.virtual-row {
+  list-style: none;
+}
+.virtual-row .row {
+  height: 36px;
+  box-sizing: border-box;
+  align-items: center;
+}
+.virtual-row .row-text {
+  white-space: pre;
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 32px;
+  box-sizing: border-box;
+}
+.recovered-label {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 0 5px;
 }

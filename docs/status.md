@@ -48,8 +48,8 @@ Use exactly one of these stages for each row:
 | PF-1 | Persistence correctness and isolation | Verified | Committed generation snapshots; exact-ID compaction; scoped identity claims; note writes rejected by RPC. PostgreSQL safety regressions and server suite pass (S3-only tests deferred to PF-6). |
 | PF-2 | Offline boot and durable receipts | Verified | Five Chromium tests cover cold offline reload, cached accounts, quota failure, reconnect receipts, and account isolation; receipt integration and 30 client unit tests pass. |
 | PF-3 | Tree semantics and recovery | Verified | Schema v2, nine semantic tests including 100 generated trees, local undo, derived recovery, indefinite trash, local view preferences; six Chromium tests and server suite pass. Development export restored before reset; browser legacy caches retained. |
-| PF-4 | Responsive large outlines | In progress | Browser latency gates in plan. |
-| PF-5 | Personal workflow | Ready | Navigation, search, trash, checkpoints and portable export. |
+| PF-4 | Responsive large outlines | Verified | Indexed structural reads, iterative traversal, touched-item undo and virtual rows; 10k browser budgets and 1k nesting pass ([measurements](personal-browser-validation.md)). Seven offline/tab tests pass. |
+| PF-5 | Personal workflow | In progress | Navigation, search, trash, checkpoints and portable export. |
 | PF-6 | Self-host and restore | Ready | Text-only defaults, optional S3, restore drill. |
 
 ## Historical subsystem status

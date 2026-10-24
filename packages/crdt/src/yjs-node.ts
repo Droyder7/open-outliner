@@ -1,3 +1,4 @@
+import { beforeItemChange } from './change-tracking.js';
 import * as Y from 'yjs';
 import {
   ITEMS_MAP,
@@ -142,6 +143,7 @@ export function writeMove(doc: Y.Doc, id: string, move: MoveRegister): void {
   Y.transact(
     doc,
     () => {
+      beforeItemChange(doc, id);
       const items = itemsMap(doc);
       let node = items.get(id);
       if (!node) {
@@ -165,6 +167,7 @@ export function writeDeleted(doc: Y.Doc, id: string, del: DeletedRegister): void
     Y.transact(
       doc,
       () => {
+        beforeItemChange(doc, id);
         const node = itemsMap(doc).get(id);
         if (!node) return;
         let deletes = node.get('deleteRecords') as Y.Map<unknown> | undefined;
@@ -189,6 +192,7 @@ export function writeDeleted(doc: Y.Doc, id: string, del: DeletedRegister): void
     return;
   }
   Y.transact(doc, () => {
+    beforeItemChange(doc, id);
     const node = itemsMap(doc).get(id);
     if (!node) return;
     const delMap = new Y.Map<unknown>();
@@ -224,6 +228,7 @@ export function writeField(
   Y.transact(
     doc,
     () => {
+      beforeItemChange(doc, id);
       const node = itemsMap(doc).get(id);
       if (node) node.set(key, value);
     },
