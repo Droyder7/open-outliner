@@ -17,9 +17,9 @@ import { createUser, createWorkspace } from '../src/db/tenancy-repo.js';
 import { createYjsStore, type YjsStore } from '../src/crdt/yjs-store.js';
 import { createProjector, type Projector } from '../src/crdt/projector.js';
 import { createConnectionRegistry } from '../src/crdt/connections.js';
-import { removeTombstoneKeysFromStore } from '../src/crdt/gc-keys.js';
+import { prepareTombstoneKeysFromStore } from '../src/crdt/gc-keys.js';
 import { createCollabServer } from '../src/crdt/server.js';
-import { createGcWorker } from '../src/jobs/gc.js';
+import { createGcWorker, type GcConfig } from '../src/jobs/gc.js';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeDb = DATABASE_URL ? describe : describe.skip;
@@ -100,16 +100,18 @@ describeDb('GC key removal — hard-delete sticks (ADR-0006/0019)', () => {
     return res.rows.map((r) => r.id);
   }
 
-  function gcWorker(overrides: {
-    removeTombstoneKeys?: (documentId: string, itemIds: readonly string[]) => Promise<void>;
-    liveConnections?: () => import('../src/crdt/connections.js').RegisteredConnection[];
-  } = {}) {
+  function gcWorker(
+    overrides: {
+      prepareTombstoneKeyRemoval?: GcConfig['prepareTombstoneKeyRemoval'];
+      liveConnections?: () => import('../src/crdt/connections.js').RegisteredConnection[];
+    } = {},
+  ) {
     return createGcWorker(db, {
       retentionMs: 0,
       batchSize: 100,
-      removeTombstoneKeys:
-        overrides.removeTombstoneKeys ??
-        ((documentId, ids) => removeTombstoneKeysFromStore(store, documentId, ids)),
+      prepareTombstoneKeyRemoval:
+        overrides.prepareTombstoneKeyRemoval ??
+        ((documentId) => prepareTombstoneKeysFromStore(store, documentId)),
       ...(overrides.liveConnections ? { liveConnections: overrides.liveConnections } : {}),
     });
   }
@@ -139,7 +141,11 @@ describeDb('GC key removal — hard-delete sticks (ADR-0006/0019)', () => {
 
     // A later edit to the same document must not resurrect the tombstone either.
     const survivor = randomUUID();
-    writeMove(client.doc, survivor, buildInsertMove(survivor, rootId, null, null, undefined, ctx()));
+    writeMove(
+      client.doc,
+      survivor,
+      buildInsertMove(survivor, rootId, null, null, undefined, ctx()),
+    );
     writeContent(client.doc, survivor, 'still alive');
     await client.sync();
     await projector.projectDocument(documentId);
@@ -155,7 +161,9 @@ describeDb('GC key removal — hard-delete sticks (ADR-0006/0019)', () => {
     const { childId, client } = await tombstonedLeaf(documentId, rootId);
 
     const registry = createConnectionRegistry();
-    registry.register('socket-1', 'session-1', documentId, 'replica-a', { close: () => {} } as unknown as Connection);
+    registry.register('socket-1', 'session-1', documentId, 'replica-a', {
+      close: () => {},
+    } as unknown as Connection);
 
     // Ledger is empty (no known replicas → unblocked), but the live socket is
     // still mid-initial-sync: the whole document must be skipped.
@@ -197,7 +205,9 @@ describeDb('GC key removal — hard-delete sticks (ADR-0006/0019)', () => {
     const { childId, client } = await tombstonedLeaf(documentId, rootId);
 
     const registry = createConnectionRegistry();
-    registry.register('socket-1', 'session-1', documentId, 'replica-a', { close: () => {} } as unknown as Connection);
+    registry.register('socket-1', 'session-1', documentId, 'replica-a', {
+      close: () => {},
+    } as unknown as Connection);
     registry.markSynced('socket-1');
 
     await gcWorker({ liveConnections: () => registry.liveConnections() }).run();
@@ -224,7 +234,7 @@ describeDb('GC key removal — hard-delete sticks (ADR-0006/0019)', () => {
         expect(room).toBeTruthy();
 
         await gcWorker({
-          removeTombstoneKeys: (doc, ids) => collab.removeTombstoneKeys(doc, ids),
+          prepareTombstoneKeyRemoval: (doc) => collab.prepareTombstoneKeyRemoval(doc),
         }).run();
 
         // Rows deleted…
@@ -251,7 +261,10 @@ describeDb('GC key removal — hard-delete sticks (ADR-0006/0019)', () => {
 
   describe('undo-after-hard-delete (ADR-0006/0011 edge)', () => {
     /** Read the projected tombstone row for an item (null deleted_at = live). */
-    async function projectedRow(documentId: string, itemId: string): Promise<{
+    async function projectedRow(
+      documentId: string,
+      itemId: string,
+    ): Promise<{
       deleted_at: Date | null;
       content: string;
     }> {

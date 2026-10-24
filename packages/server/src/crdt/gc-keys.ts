@@ -2,40 +2,46 @@ import * as Y from 'yjs';
 import { ITEMS_MAP } from '@open-outliner/shared';
 import type { YjsStore } from './yjs-store.js';
 
+/** A document retained before GC acquires its advisory lock (ADR-0020). */
+export interface PreparedTombstoneKeyRemoval {
+  /** Remove keys and durably persist the delta without loading stored history. */
+  remove(itemIds: readonly string[]): Promise<void>;
+  /** Release the document AFTER the GC transaction ends, including on failure. */
+  release(): Promise<void>;
+}
+
 /**
- * Author tombstone key removals into the durable CRDT plane (ADR-0006/0019).
- *
- * GC hard-delete must remove BOTH the projected `items` row AND the item's Yjs
- * key, or the next projection pass re-upserts the tombstone (the "hard-delete
- * doesn't stick" bug). Key removal is a CRDT operation: it must reach connected
- * clients (broadcast) and reconnecting replicas (the delete op rides normal
- * Yjs sync), so it is persisted to `yjs_updates` as an ordinary update.
- *
- * When a Hocuspocus room is live for the document, the caller should transact
- * on the room's Document instead — Hocuspocus broadcasts the deletion to every
- * connected client AND the Database extension persists it. This helper is the
- * no-live-room fallback: it loads the merged state from the store, deletes the
- * keys, and persists ONLY the delta (the deletion set) as a new update — never
- * a full-state snapshot.
+ * Remove keys from an already-loaded document. For a Hocuspocus room the
+ * transaction also broadcasts deletions. Persist immediately, before GC deletes
+ * projected rows; the Database extension's debounced store is not sufficient.
  */
-export async function removeTombstoneKeysFromStore(
+export async function removeTombstoneKeysFromDocument(
   store: YjsStore,
   documentId: string,
+  doc: Y.Doc,
   itemIds: readonly string[],
 ): Promise<void> {
+  if (doc.isDestroyed) throw new Error('GC document was released');
   if (itemIds.length === 0) return;
+  const before = Y.encodeStateVector(doc);
+  Y.transact(doc, () => {
+    const items = doc.getMap(ITEMS_MAP);
+    for (const id of itemIds) items.delete(id);
+  });
+  const delta = Y.encodeStateAsUpdate(doc, before);
+  if (delta.length > 0) await store.storeUpdate(documentId, delta);
+}
+
+/** Headless store adapter: replay happens at preparation, never during remove. */
+export async function prepareTombstoneKeysFromStore(
+  store: YjsStore,
+  documentId: string,
+): Promise<PreparedTombstoneKeyRemoval> {
   const doc = await store.loadDocument(documentId);
-  try {
-    const before = Y.encodeStateVector(doc);
-    Y.transact(doc, () => {
-      const items = doc.getMap(ITEMS_MAP);
-      for (const id of itemIds) items.delete(id);
-    });
-    const delta = Y.encodeStateAsUpdate(doc, before);
-    if (delta.length > 0) {
-      await store.storeUpdate(documentId, delta);
-    }
-  } finally {
-    doc.destroy();
-  }
+  return {
+    remove: (itemIds) => removeTombstoneKeysFromDocument(store, documentId, doc, itemIds),
+    async release() {
+      doc.destroy();
+    },
+  };
 }

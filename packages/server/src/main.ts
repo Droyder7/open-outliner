@@ -53,10 +53,8 @@ async function main(): Promise<void> {
     {
       retentionMs: config.gcRetentionMs,
       batchSize: 500,
-      // ADR-0006/0019: hard-delete removes the item's Yjs key too (live room
-      // when loaded, store delta otherwise), so projection can't re-upsert it.
-      removeTombstoneKeys: (documentId, itemIds) =>
-        collab.removeTombstoneKeys(documentId, itemIds),
+      // ADR-0020: retain/load before the advisory lock; release after commit.
+      prepareTombstoneKeyRemoval: (documentId) => collab.prepareTombstoneKeyRemoval(documentId),
       // In-process supplement to the replica_sync gate (ADR-0019).
       liveConnections: () => collab.connections.liveConnections(),
       // Stale-replica policy: forget replicas not seen for the TTL (bounds

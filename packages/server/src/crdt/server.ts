@@ -1,15 +1,13 @@
-import * as Y from 'yjs';
 import { Hocuspocus } from '@hocuspocus/server';
 import { Database } from '@hocuspocus/extension-database';
 import { Forbidden } from '@hocuspocus/common';
 import type { Db } from '../db/db.js';
 import { createYjsStore, type YjsStore } from './yjs-store.js';
 import { createProjector, type Projector } from './projector.js';
-import { resolveWsConnection, startAuthHeartbeat, } from './auth.js';
+import { resolveWsConnection, startAuthHeartbeat } from './auth.js';
 import { createConnectionRegistry, type ConnectionRegistry } from './connections.js';
 import { createReplicaHooks } from './replica-hooks.js';
-import { ITEMS_MAP } from '@open-outliner/shared';
-import { removeTombstoneKeysFromStore } from './gc-keys.js';
+import { removeTombstoneKeysFromDocument, type PreparedTombstoneKeyRemoval } from './gc-keys.js';
 import { createRateLimiter, type RateLimiter } from '../http/rate-limit.js';
 
 /**
@@ -56,15 +54,8 @@ export interface CollabServer {
   connections: ConnectionRegistry;
   connectLimiter: RateLimiter;
   stopAuthHeartbeat: () => void;
-  /**
-   * Author tombstone key removals into the CRDT plane (ADR-0006/0019).
-   * Preferred path is a transaction on the LIVE room Document when one is
-   * loaded: Hocuspocus broadcasts the deletion to connected clients and the
-   * Database extension persists it. With no live room, falls back to a store
-   * delta (gc-keys.ts). Callers (the GC worker) invoke this under the replica-
-   * acknowledgement gate.
-   */
-  removeTombstoneKeys(documentId: string, itemIds: readonly string[]): Promise<void>;
+  /** Load/retain a room outside the GC lock; callers must release the handle. */
+  prepareTombstoneKeyRemoval(documentId: string): Promise<PreparedTombstoneKeyRemoval>;
 }
 
 export function createCollabServer(deps: CollabServerDeps): CollabServer {
@@ -148,41 +139,24 @@ export function createCollabServer(deps: CollabServerDeps): CollabServer {
     connections,
     connectLimiter,
     stopAuthHeartbeat: heartbeat.stop,
-    async removeTombstoneKeys(documentId, itemIds) {
-      if (itemIds.length === 0) return;
-      const room = hocuspocus.documents.get(documentId);
-      if (room && !room.isDestroyed) {
-        try {
-          // Live room: a server-side transaction on the room Document. Hocuspocus
-          // fires the document's onUpdate → broadcasts the deletion to every
-          // connected client — without this, they would keep the tombstone key
-          // until their next sync. The Database extension would eventually
-          // persist it too, but behind its debounce (~2s): the GC transaction
-          // below commits the row deletes immediately, so a crash inside the
-          // debounce gap would lose the key deletions and the next projection
-          // pass would re-upsert the tombstones with a fresh deleted_at
-          // (retention silently restarting). Persist the delta directly —
-          // before returning — to make broadcast and durability atomic from
-          // the caller's perspective. Concurrent client updates merged into
-          // the room between the two state vectors merely ride along (storing
-          // an update twice is idempotent in Yjs).
-          const before = Y.encodeStateVector(room);
-          Y.transact(room, () => {
-            const items = room.getMap(ITEMS_MAP);
-            for (const id of itemIds) items.delete(id);
-          });
-          const delta = Y.encodeStateAsUpdate(room, before);
-          if (delta.length > 0) await store.storeUpdate(documentId, delta);
-          return;
-        } catch (err) {
-          log(
-            `live-room tombstone removal failed for ${documentId}, falling back to store: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
-        }
-      }
-      await removeTombstoneKeysFromStore(store, documentId, itemIds);
+    async prepareTombstoneKeyRemoval(documentId) {
+      // Direct connections reuse a live room or load a cold room, and count as
+      // holders so the last browser disconnect cannot unload it during GC.
+      const direct = await hocuspocus.openDirectConnection(documentId);
+      let released = false;
+      return {
+        async remove(itemIds) {
+          if (released || !direct.document) throw new Error('GC document was released');
+          await removeTombstoneKeysFromDocument(store, documentId, direct.document, itemIds);
+        },
+        async release() {
+          if (released) return;
+          released = true;
+          // This may flush the Database extension and unload the room. GC calls
+          // it only after its advisory-lock transaction has finished.
+          await direct.disconnect();
+        },
+      };
     },
   };
 }
