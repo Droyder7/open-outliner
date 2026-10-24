@@ -40,11 +40,21 @@ Use exactly one of these stages for each row:
 9. Do not delete historical IDs. Mark removed work **Deferred** and explain the scope change.
 10. Review all V1 rows before a release and whenever `roadmap.md` changes.
 
-## Current Status
+## Personal-first delivery
 
-The repository currently contains product and architecture specifications but no application
-implementation. An accepted design document is evidence of specification, not evidence that
-the corresponding subsystem has been implemented.
+| ID | Part | Stage | Evidence / next step |
+|---|---|---|---|
+| PF-0 | Baseline and specifications | Verified | [Review](architecture-review.md), [plan](personal-first-plan.md), ADR-0021; no supplied user datastore and no destructive reset performed. |
+| PF-1 | Persistence correctness and isolation | In progress | Add deterministic compaction/projection/isolation regressions before later milestones. |
+| PF-2 | Offline boot and durable receipts | Ready | Implement browser catalog and pending-update durability. |
+| PF-3 | Tree semantics and recovery | Ready | Schema v2 and shared effective tree. |
+| PF-4 | Responsive large outlines | Ready | Browser latency gates in plan. |
+| PF-5 | Personal workflow | Ready | Navigation, search, trash, checkpoints and portable export. |
+| PF-6 | Self-host and restore | Ready | Text-only defaults, optional S3, restore drill. |
+
+## Historical subsystem status
+
+Earlier verification describes its original workloads, not the stronger personal-first gates.
 
 | ID | Part | Scope | Stage | Evidence / next step |
 |---|---|---|---|---|

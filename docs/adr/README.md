@@ -26,6 +26,7 @@ one, add a new ADR that supersedes it and update the Status line here.
 | [0018](./0018-plain-text-content-v1.md) | V1 item content is plain text; TipTap dropped for a direct `Y.Text` binding | Accepted |
 | [0019](./0019-replica-ack-gc-gating.md) | Replica-acknowledgement gating for the GC retention window | Accepted |
 | [0020](./0020-gc-prepared-documents.md) | Prepare and retain GC documents before acquiring their advisory lock | Accepted |
+| [0021](./0021-personal-first.md) | Personal-first local-first product and delivery | Accepted |
 
 ## Template
 

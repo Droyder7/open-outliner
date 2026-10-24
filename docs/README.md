@@ -8,6 +8,8 @@ research (options weighed, trade-offs surveyed), these docs record **what we hav
 actually chosen** and why. When the two disagree, **these docs win** — the report is a
 snapshot of the investigation, not the source of truth.
 
+Start with the [personal-first delivery plan](personal-first-plan.md) and [architecture review](architecture-review.md). ADR-0021 supersedes older conflicting scope.
+
 ## How to read this
 
 Start at the top and go down; each doc assumes the ones above it.

@@ -1,3 +1,5 @@
+> Current direction: [personal-first plan](personal-first-plan.md), accepted in [ADR-0021](adr/0021-personal-first.md), supersedes conflicting scope below.
+
 # 01 — Architecture Overview
 
 **Status:** Accepted · **Decision owner:** _TBD_ · **Last updated:** 2026-07-21
