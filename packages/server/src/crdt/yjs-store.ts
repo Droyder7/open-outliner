@@ -1,5 +1,5 @@
 import * as Y from 'yjs';
-import type { Db } from '../db/db.js';
+import type { Db, TxClient } from '../db/db.js';
 
 /**
  * Yjs persistence store: ack-after-persist to `yjs_updates` (ADR-0015).
@@ -43,24 +43,7 @@ export interface YjsStore {
 export function createYjsStore(db: Db, log: (msg: string) => void = () => {}): YjsStore {
   return {
     async storeUpdate(documentId, update) {
-      return db.transaction(async (tx) => {
-        await tx.query(`INSERT INTO yjs_updates (document_id, update) VALUES ($1, $2)`, [
-          documentId,
-          Buffer.from(update),
-        ]);
-        // Advance a committed generation. Upsert the projection row so a
-        // brand-new document (no createDocument seed) still tracks correctly.
-        const res = await tx.query<{ source_rev: string }>(
-          `INSERT INTO document_projection (document_id, source_rev, projected_rev)
-           VALUES ($1, 1, 0)
-           ON CONFLICT (document_id) DO UPDATE
-             SET source_rev = document_projection.source_rev + 1,
-                 updated_at = now()
-           RETURNING source_rev`,
-          [documentId],
-        );
-        return Number.parseInt(res.rows[0]!.source_rev, 10);
-      });
+      return db.transaction((tx) => appendDocumentUpdate(tx, documentId, update));
     },
 
     async loadDocumentState(documentId) {
@@ -100,4 +83,27 @@ export function createYjsStore(db: Db, log: (msg: string) => void = () => {}): Y
       }
     },
   };
+}
+
+export async function appendDocumentUpdate(
+  tx: TxClient,
+  documentId: string,
+  update: Uint8Array,
+): Promise<number> {
+  await tx.query(`INSERT INTO yjs_updates (document_id, update) VALUES ($1, $2)`, [
+    documentId,
+    Buffer.from(update),
+  ]);
+  // Advance a committed generation. Upsert the projection row so a
+  // brand-new document (no createDocument seed) still tracks correctly.
+  const res = await tx.query<{ source_rev: string }>(
+    `INSERT INTO document_projection (document_id, source_rev, projected_rev)
+           VALUES ($1, 1, 0)
+           ON CONFLICT (document_id) DO UPDATE
+             SET source_rev = document_projection.source_rev + 1,
+                 updated_at = now()
+           RETURNING source_rev`,
+    [documentId],
+  );
+  return Number.parseInt(res.rows[0]!.source_rev, 10);
 }

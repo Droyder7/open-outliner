@@ -53,6 +53,8 @@ export const RPC_METHODS = [
   'GetItems',
   'GetChildren',
   'UpdateItem',
+  'PersistDocumentUpdate',
+  'GetDocumentState',
   'CreateDocument',
   'ListDocuments',
   'InviteMember',
@@ -82,7 +84,16 @@ export interface ItemView {
 }
 
 /** Params per method. */
+export const DOCUMENT_SCHEMA_VERSION = 1;
 export interface RpcParams {
+  PersistDocumentUpdate: {
+    documentId: string;
+    batchId: string;
+    schemaVersion: number;
+    update: string;
+  };
+  GetDocumentState: { documentId: string; schemaVersion: number };
+
   Signup: { email: string; password: string; displayName?: string; workspaceName?: string };
   Login: { email: string; password: string };
   Logout: Record<string, never>;
@@ -98,7 +109,7 @@ export interface RpcParams {
       metadata: Record<string, unknown>;
     }>;
   };
-  CreateDocument: { workspaceId: string; title?: string };
+  CreateDocument: { workspaceId: string; title?: string; documentId?: string };
   ListDocuments: { workspaceId: string };
   InviteMember: { workspaceId: string; email: string };
   RemoveMember: { workspaceId: string; userId: string };
@@ -113,6 +124,9 @@ export interface RpcParams {
 
 /** Result per method. */
 export interface RpcResult {
+  PersistDocumentUpdate: { batchId: string; revision: number };
+  GetDocumentState: { update: string; revision: number };
+
   // Session is established via a Set-Cookie response header, not the JSON body
   // (the session cookie is httpOnly — see docs/adr/0014). The body only echoes
   // identity plus the CSRF token the client must echo back on later mutations.
@@ -180,6 +194,7 @@ export const RPC_PUBLIC_METHODS: readonly RpcMethod[] = ['Signup', 'Login'];
  * safe to fail fast offline rather than queue (offline-and-pwa.md).
  */
 export const RPC_READ_METHODS: readonly RpcMethod[] = [
+  'GetDocumentState',
   'GetItems',
   'GetChildren',
   'ListDocuments',

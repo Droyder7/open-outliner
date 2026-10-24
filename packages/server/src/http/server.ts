@@ -12,7 +12,7 @@ import type { S3Service } from '../storage/s3.js';
 import type { GcWorker } from '../jobs/gc.js';
 import { maxProjectionLag, maxCompactionLag } from '../jobs/compaction.js';
 
-const MAX_BODY_BYTES = 5_000_000; // 5MB — large enough for ImportDocument JSON payloads
+const MAX_BODY_BYTES = 8_388_608; // 5MB — large enough for ImportDocument JSON payloads
 
 export interface HttpServerDeps {
   db: Db;

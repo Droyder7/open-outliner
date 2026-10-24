@@ -160,10 +160,21 @@ export async function createDocumentWithRoot(
   db: Db,
   workspaceId: string,
   title: string,
+  requestedId?: string,
 ): Promise<{ documentId: string; rootItemId: string }> {
-  const documentId = randomUUID();
+  const documentId = requestedId ?? randomUUID();
   const rootRank = rankBetween(null, null);
   await db.transaction(async (tx: TxClient) => {
+    await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`create:${documentId}`]);
+    const existing = await tx.query<{ workspace_id: string }>(
+      'SELECT workspace_id FROM documents WHERE id=$1',
+      [documentId],
+    );
+    if (existing.rows.length) {
+      if (existing.rows[0]!.workspace_id !== workspaceId)
+        throw new Error('Document identity belongs to another workspace');
+      return;
+    }
     await tx.query(`INSERT INTO documents (id, workspace_id, title) VALUES ($1, $2, $3)`, [
       documentId,
       workspaceId,

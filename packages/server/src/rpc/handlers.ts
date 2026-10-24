@@ -1,3 +1,7 @@
+import * as Y from 'yjs';
+import { createHash } from 'node:crypto';
+import { DOCUMENT_SCHEMA_VERSION } from '@open-outliner/shared';
+import { createYjsStore, appendDocumentUpdate } from '../crdt/yjs-store.js';
 import type {
   AttachmentView,
   ItemView,
@@ -199,6 +203,65 @@ export const handlers: { [M in RpcMethod]: RpcHandler<M> } = {
     return { items: rows.map(toItemView) };
   },
 
+  async GetDocumentState(params, ctx) {
+    const { userId } = requireSession(ctx);
+    await requireDocumentAccess(ctx, params.documentId, userId);
+    if (params.schemaVersion !== DOCUMENT_SCHEMA_VERSION)
+      throw new RpcHandlerError('bad_request', 'Upgrade required: incompatible document schema');
+    const snapshot = await createYjsStore(ctx.db).loadDocumentSnapshot(params.documentId);
+    try {
+      return {
+        update: Buffer.from(Y.encodeStateAsUpdate(snapshot.doc)).toString('base64'),
+        revision: snapshot.revision,
+      };
+    } finally {
+      snapshot.doc.destroy();
+    }
+  },
+  async PersistDocumentUpdate(params, ctx) {
+    const { userId } = requireSession(ctx);
+    await requireDocumentAccess(ctx, params.documentId, userId);
+    if (params.schemaVersion !== DOCUMENT_SCHEMA_VERSION)
+      throw new RpcHandlerError('bad_request', 'Upgrade required: incompatible document schema');
+    if (
+      typeof params.batchId !== 'string' ||
+      !/^[0-9a-f-]{36}$/i.test(params.batchId) ||
+      typeof params.update !== 'string'
+    )
+      throw new RpcHandlerError('bad_request', 'Invalid update envelope');
+    const update = Buffer.from(params.update, 'base64');
+    if (update.length > 4 * 1024 * 1024 || update.toString('base64') !== params.update)
+      throw new RpcHandlerError('bad_request', 'Invalid or oversized update');
+    const probe = new Y.Doc();
+    try {
+      Y.applyUpdate(probe, update);
+    } catch {
+      throw new RpcHandlerError('bad_request', 'Invalid Yjs update');
+    } finally {
+      probe.destroy();
+    }
+    const digest = createHash('sha256').update(update).digest('hex');
+    return ctx.db.transaction(async (tx) => {
+      await tx.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        `batch:${params.documentId}:${params.batchId}`,
+      ]);
+      const prior = await tx.query<{ digest: string; revision: string }>(
+        'SELECT digest,revision FROM document_update_receipts WHERE document_id=$1 AND batch_id=$2',
+        [params.documentId, params.batchId],
+      );
+      if (prior.rows[0]) {
+        if (prior.rows[0].digest !== digest)
+          throw new RpcHandlerError('conflict', 'Batch identity reused with different bytes');
+        return { batchId: params.batchId, revision: Number(prior.rows[0].revision) };
+      }
+      const revision = await appendDocumentUpdate(tx, params.documentId, update);
+      await tx.query(
+        'INSERT INTO document_update_receipts(document_id,batch_id,digest,revision) VALUES($1,$2,$3,$4)',
+        [params.documentId, params.batchId, digest, revision],
+      );
+      return { batchId: params.batchId, revision };
+    });
+  },
   async UpdateItem(params, ctx) {
     if (params.fields && Object.hasOwn(params.fields, 'note')) {
       throw new RpcHandlerError(
@@ -225,12 +288,15 @@ export const handlers: { [M in RpcMethod]: RpcHandler<M> } = {
   },
 
   async CreateDocument(params, ctx) {
+    if (params.documentId && !/^[0-9a-f-]{36}$/i.test(params.documentId))
+      throw new RpcHandlerError('bad_request', 'Invalid document ID');
     const { userId } = requireSession(ctx);
     await requireWorkspaceMember(ctx, params.workspaceId, userId);
     const { documentId, rootItemId } = await createDocumentWithRoot(
       ctx.db,
       params.workspaceId,
       params.title ?? 'Untitled',
+      params.documentId,
     );
     return { documentId, rootItemId };
   },

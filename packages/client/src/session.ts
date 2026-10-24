@@ -91,7 +91,12 @@ export interface Session {
   destroy(): void;
 }
 
-export function createSession(documentId: string): Session {
+export interface SessionOptions {
+  accountId?: string;
+  realtime?: boolean;
+  beforeSeed?: (doc: Y.Doc) => Promise<void>;
+}
+export function createSession(documentId: string, options: SessionOptions = {}): Session {
   const doc = new Y.Doc();
   const initialReplicaId = getReplicaId();
   let replicaId = initialReplicaId;
@@ -105,9 +110,12 @@ export function createSession(documentId: string): Session {
   // replica derives the SAME root id and can never create a second root.
   const rootId = documentId;
 
-  const idb = new IndexeddbPersistence(`oo:${documentId}`, doc);
+  const idb = new IndexeddbPersistence(
+    options.accountId ? `oo:personal:${options.accountId}:${documentId}` : `oo:${documentId}`,
+    doc,
+  );
 
-  const syncUrl = import.meta.env.VITE_SYNC_URL;
+  const syncUrl = options.realtime === false ? undefined : import.meta.env.VITE_SYNC_URL;
   // The replica id the sync connection identifies as. Starts as the tab's id
   // and is replaced (with the connection) at most once, if this tab loses the
   // duplicate-tab duel below. The actor reads the current id for future HLC
@@ -173,17 +181,19 @@ export function createSession(documentId: string): Session {
     actor,
     documentId,
     rootId,
-    whenReady: Promise.all([waitForLocalPersistence(idb), waitForInitialSync(() => provider)]).then(
-      () => {
-        // Seed a root + first empty bullet once local AND (if configured) server
-        // state has loaded, so a brand-new document is immediately typeable
-        // without racing an existing server-seeded root (see waitForInitialSync).
-        if (!getRootId(doc)) createRoot(doc, rootId, actor);
-        if (getChildren(doc, rootId).length === 0) {
-          insertItem(doc, crypto.randomUUID(), rootId, undefined, actor);
-        }
-      },
-    ),
+    whenReady: Promise.all([
+      waitForLocalPersistence(idb),
+      provider ? waitForInitialSync(() => provider) : Promise.resolve(),
+    ]).then(async () => {
+      await options.beforeSeed?.(doc);
+      // Seed a root + first empty bullet once local AND (if configured) server
+      // state has loaded, so a brand-new document is immediately typeable
+      // without racing an existing server-seeded root (see waitForInitialSync).
+      if (!getRootId(doc)) createRoot(doc, rootId, actor);
+      if (getChildren(doc, rootId).length === 0) {
+        insertItem(doc, crypto.randomUUID(), rootId, undefined, actor);
+      }
+    }),
     destroy() {
       claim?.stop();
       provider?.destroy();

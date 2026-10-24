@@ -9,3 +9,6 @@ coverage
 *.tsbuildinfo
 .pnpm*
 refs
+
+test-results/
+playwright-report/

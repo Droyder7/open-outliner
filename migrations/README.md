@@ -15,6 +15,7 @@ exploratory history, **not** authority.
 | `0004_yjs_updates_serial_v1.sql` | Adds the `id BIGSERIAL` PRIMARY KEY to `yjs_updates` that [ADR-0013](../docs/adr/0013-projection-revision-guard.md) relies on for `source_rev` (`0001` created the table without it). This is the monotonic key the projection revision guard compares. |
 | `0005_replica_sync_v1.sql` | Replica sync-acknowledgement ledger ([ADR-0019](../docs/adr/0019-replica-ack-gc-gating.md)): `(document_id, replica_id)` with a monotonic `last_synced_at` (only a completed sync advances it) and a `last_seen_at` liveness column. This is what makes the tombstone-aware GC retention window a replica-acknowledgement bound rather than a bare wall clock ([ADR-0006](../docs/adr/0006-soft-delete-and-tombstone-gc.md)). |
 | `0006_replica_sync_last_seen_idx.sql` | Indexes `replica_sync.last_seen_at` for stale-replica pruning on each GC pass (issue #3). |
+| `0007_document_receipts.sql` | Idempotent committed document-update receipts. |
 
 ## Conventions
 
