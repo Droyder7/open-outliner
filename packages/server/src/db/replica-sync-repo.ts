@@ -25,11 +25,7 @@ export interface ReplicaTouch {
  * `synced` is true, and is monotonic (GREATEST) so a reconnect can never regress
  * a replica past a tombstone. `last_seen_at` advances on every touch.
  */
-export async function touchReplica(
-  db: Db,
-  touch: ReplicaTouch,
-  at: Date,
-): Promise<void> {
+export async function touchReplica(db: Db, touch: ReplicaTouch, at: Date): Promise<void> {
   await db.query(
     `INSERT INTO replica_sync (document_id, replica_id, last_synced_at, last_seen_at)
      VALUES ($1, $2, $3, $4)
@@ -37,6 +33,34 @@ export async function touchReplica(
        last_synced_at = GREATEST(replica_sync.last_synced_at, EXCLUDED.last_synced_at),
        last_seen_at   = GREATEST(replica_sync.last_seen_at, EXCLUDED.last_seen_at)`,
     [touch.documentId, touch.replicaId, touch.synced ? at : null, at],
+  );
+}
+
+/** Batch one heartbeat tick, coalescing sockets that share a ledger key. */
+export async function touchReplicasBatch(
+  db: Db,
+  touches: readonly ReplicaTouch[],
+  at: Date,
+): Promise<void> {
+  if (touches.length === 0) return;
+  await db.query(
+    `INSERT INTO replica_sync (document_id, replica_id, last_synced_at, last_seen_at)
+     SELECT document_id, replica_id,
+            CASE WHEN bool_or(synced) THEN $4::timestamptz ELSE NULL END,
+            $4::timestamptz
+       FROM unnest($1::uuid[], $2::text[], $3::boolean[])
+            AS touches(document_id, replica_id, synced)
+      GROUP BY document_id, replica_id
+      ORDER BY document_id, replica_id
+     ON CONFLICT (document_id, replica_id) DO UPDATE SET
+       last_synced_at = GREATEST(replica_sync.last_synced_at, EXCLUDED.last_synced_at),
+       last_seen_at   = GREATEST(replica_sync.last_seen_at, EXCLUDED.last_seen_at)`,
+    [
+      touches.map((touch) => touch.documentId),
+      touches.map((touch) => touch.replicaId),
+      touches.map((touch) => touch.synced),
+      at,
+    ],
   );
 }
 
@@ -58,10 +82,7 @@ export async function touchReplica(
  * (see ADR-0019, stale-replica TTL). Returns the number of rows pruned.
  */
 export async function pruneStaleReplicas(db: Db, olderThan: Date): Promise<number> {
-  const res = await db.query(
-    `DELETE FROM replica_sync WHERE last_seen_at < $1`,
-    [olderThan],
-  );
+  const res = await db.query(`DELETE FROM replica_sync WHERE last_seen_at < $1`, [olderThan]);
   return res.rowCount ?? 0;
 }
 
@@ -76,10 +97,7 @@ export async function pruneStaleReplicas(db: Db, olderThan: Date): Promise<numbe
  * heartbeat advances its `last_seen_at` every few seconds, so it always ranks
  * among the freshest rows of its document. Returns the number of rows pruned.
  */
-export async function pruneNeverAckedOverflow(
-  db: Db,
-  maxPerDocument: number,
-): Promise<number> {
+export async function pruneNeverAckedOverflow(db: Db, maxPerDocument: number): Promise<number> {
   const res = await db.query(
     `DELETE FROM replica_sync
       WHERE ctid IN (

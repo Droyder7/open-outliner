@@ -1,5 +1,5 @@
 import type { Db } from '../db/db.js';
-import { touchReplica } from '../db/replica-sync-repo.js';
+import { touchReplicasBatch, type ReplicaTouch } from '../db/replica-sync-repo.js';
 import type { ConnectionRegistry } from './connections.js';
 
 /**
@@ -25,24 +25,27 @@ export function startReplicaHeartbeat(
   intervalMs: number,
   log: (msg: string) => void = () => {},
 ): { stop: () => void } {
+  let running = false;
   const timer = setInterval(() => {
+    if (running) return;
+    running = true;
     void (async () => {
-      const at = new Date();
-      for (const entry of registry.liveConnections()) {
-        if (!entry.replicaId) continue; // legacy client — nothing to track
-        try {
-          await touchReplica(
-            db,
-            { documentId: entry.documentName, replicaId: entry.replicaId, synced: entry.synced },
-            at,
-          );
-        } catch (err) {
-          log(
-            `replica heartbeat failed for ${entry.documentName}/${entry.replicaId}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
+      try {
+        const at = new Date();
+        const touches: ReplicaTouch[] = [];
+        for (const entry of registry.liveConnections()) {
+          if (!entry.replicaId) continue; // legacy client — nothing to track
+          touches.push({
+            documentId: entry.documentName,
+            replicaId: entry.replicaId,
+            synced: entry.synced,
+          });
         }
+        await touchReplicasBatch(db, touches, at);
+      } catch (err) {
+        log(`replica heartbeat failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        running = false;
       }
     })();
   }, intervalMs);

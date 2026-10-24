@@ -6,6 +6,7 @@ import { loadConfig } from '../src/config.js';
 import { createUser, createWorkspace } from '../src/db/tenancy-repo.js';
 import {
   touchReplica,
+  touchReplicasBatch,
   hasUnsyncedReplicaPast,
   pruneStaleReplicas,
   pruneNeverAckedOverflow,
@@ -77,14 +78,51 @@ describeDb('replica_sync ledger + GC replica-ack gating (ADR-0019)', () => {
   const sixHoursAgo = () => new Date(Date.now() - 6 * 3_600_000); // seen recently
   const thirtyDaysAgo = () => new Date(Date.now() - 30 * 86_400_000); // stale past any TTL
 
+  describe('touchReplicasBatch', () => {
+    it('coalesces duplicate keys, preserves acknowledgement monotonicity, and prunes stale rows', async () => {
+      const { documentId } = await freshDocument();
+      const at = twoDaysAgo();
+      await touchReplicasBatch(
+        db,
+        [
+          { documentId, replicaId: 'synced', synced: false },
+          { documentId, replicaId: 'synced', synced: true },
+          { documentId, replicaId: 'unsynced', synced: false },
+        ],
+        at,
+      );
+      let rows = await db.query(
+        'SELECT * FROM replica_sync WHERE document_id = $1 ORDER BY replica_id',
+        [documentId],
+      );
+      expect(rows.rows).toHaveLength(2);
+      expect(new Date(rows.rows[0]!.last_synced_at)).toEqual(at);
+      expect(rows.rows[1]!.last_synced_at).toBeNull();
+
+      // Delayed batches cannot regress either timestamp, even when unsynced.
+      await touchReplicasBatch(
+        db,
+        [{ documentId, replicaId: 'synced', synced: false }],
+        threeDaysAgo(),
+      );
+      rows = await db.query(
+        'SELECT * FROM replica_sync WHERE document_id = $1 AND replica_id = $2',
+        [documentId, 'synced'],
+      );
+      expect(new Date(rows.rows[0]!.last_synced_at)).toEqual(at);
+      expect(new Date(rows.rows[0]!.last_seen_at)).toEqual(at);
+      await touchReplicasBatch(db, [], at);
+      await pruneStaleReplicas(db, oneDayAgo());
+      expect(
+        (await db.query('SELECT * FROM replica_sync WHERE document_id = $1', [documentId])).rows,
+      ).toHaveLength(0);
+    });
+  });
+
   describe('touchReplica / hasUnsyncedReplicaPast', () => {
     it('an unsynced touch records liveness but leaves last_synced_at NULL (blocks GC)', async () => {
       const { documentId } = await freshDocument();
-      await touchReplica(
-        db,
-        { documentId, replicaId: 'r1', synced: false },
-        twoDaysAgo(),
-      );
+      await touchReplica(db, { documentId, replicaId: 'r1', synced: false }, twoDaysAgo());
       const row = await db.query(
         `SELECT last_synced_at, last_seen_at FROM replica_sync WHERE document_id = $1`,
         [documentId],
@@ -283,15 +321,25 @@ describeDb('replica_sync ledger + GC replica-ack gating (ADR-0019)', () => {
       await runGc();
 
       // The tombstoned parent has a LIVE child → not a leaf → retained bottom-up.
-      expect(await itemIds(documentId)).toEqual(expect.arrayContaining([rootId, parentId, liveChildId]));
+      expect(await itemIds(documentId)).toEqual(
+        expect.arrayContaining([rootId, parentId, liveChildId]),
+      );
     });
   });
 
   describe('stale-replica pruning (ADR-0019 TTL)', () => {
     it('prunes rows not seen since the cutoff, keeps fresh ones, returns the count', async () => {
       const { documentId } = await freshDocument();
-      await touchReplica(db, { documentId, replicaId: 'old-synced', synced: true }, thirtyDaysAgo());
-      await touchReplica(db, { documentId, replicaId: 'old-never-synced', synced: false }, thirtyDaysAgo());
+      await touchReplica(
+        db,
+        { documentId, replicaId: 'old-synced', synced: true },
+        thirtyDaysAgo(),
+      );
+      await touchReplica(
+        db,
+        { documentId, replicaId: 'old-never-synced', synced: false },
+        thirtyDaysAgo(),
+      );
       await touchReplica(db, { documentId, replicaId: 'fresh', synced: true }, oneDayAgo());
 
       const pruned = await pruneStaleReplicas(db, new Date(Date.now() - 7 * 86_400_000));
@@ -366,7 +414,11 @@ describeDb('replica_sync ledger + GC replica-ack gating (ADR-0019)', () => {
       await touchReplica(db, { documentId: docA, replicaId: 'acked-1', synced: true }, oneDayAgo());
       // docB is under the cap — must be untouched.
       for (let i = 0; i < 5; i++) {
-        await touchReplica(db, { documentId: docB, replicaId: `b-${i}`, synced: false }, sixHoursAgo());
+        await touchReplica(
+          db,
+          { documentId: docB, replicaId: `b-${i}`, synced: false },
+          sixHoursAgo(),
+        );
       }
 
       const pruned = await pruneNeverAckedOverflow(db, 64);
@@ -424,17 +476,17 @@ describeDb('replica_sync ledger + GC replica-ack gating (ADR-0019)', () => {
       // offline replica — must NOT count as "stuck".
       const young = await freshDocument();
       await insertTombstone(young.documentId, young.rootId, twoDaysAgo());
-      await touchReplica(db, { documentId: young.documentId, replicaId: 'r1', synced: true }, threeDaysAgo());
+      await touchReplica(
+        db,
+        { documentId: young.documentId, replicaId: 'r1', synced: true },
+        threeDaysAgo(),
+      );
       expect(await worker.blockedDocs()).toBe(before);
 
       // Blocked AND retention-eligible (tombstone 9d old) → counted. The
       // replica synced BEFORE the tombstone (12d ago), so the gate blocks it.
       const old = await freshDocument();
-      await insertTombstone(
-        old.documentId,
-        old.rootId,
-        new Date(Date.now() - 9 * 86_400_000),
-      );
+      await insertTombstone(old.documentId, old.rootId, new Date(Date.now() - 9 * 86_400_000));
       await touchReplica(
         db,
         { documentId: old.documentId, replicaId: 'r1', synced: true },

@@ -51,18 +51,14 @@ describe('replica-ack heartbeat (ADR-0019)', () => {
     const heartbeat = startReplicaHeartbeat(db, registry, 5_000);
     await vi.advanceTimersByTimeAsync(10_000); // two ticks
 
-    expect(calls).toHaveLength(4);
-    const [firstTick, secondTick] = [calls.slice(0, 2), calls.slice(2)];
-
-    for (const tick of [firstTick, secondTick]) {
-      const touchA = tick[0]!;
-      const touchB = tick[1]!;
-      expect(touchA.params[0]).toBe('doc-1');
-      expect(touchA.params[1]).toBe('replica-a');
-      expect(touchA.params[2]).not.toBeNull(); // synced → timestamp
-      expect(touchB.params[0]).toBe('doc-1');
-      expect(touchB.params[1]).toBe('replica-b');
-      expect(touchB.params[2]).toBeNull(); // not synced → NULL keeps GC blocked
+    expect(calls).toHaveLength(2); // one round trip per tick
+    for (const call of calls) {
+      expect(call.params).toEqual([
+        ['doc-1', 'doc-1'],
+        ['replica-a', 'replica-b'],
+        [true, false], // only synced replicas may advance last_synced_at
+        expect.any(Date),
+      ]);
     }
 
     heartbeat.stop();
@@ -92,5 +88,54 @@ describe('replica-ack heartbeat (ADR-0019)', () => {
     heartbeat.stop();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(calls).toHaveLength(1);
+  });
+
+  it('defers ticks while a batch is pending, then takes a fresh connection snapshot', async () => {
+    vi.useFakeTimers();
+    const connections = [entry('s1', 'doc-1', 'replica-a', false)];
+    let finish!: () => void;
+    const query = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          }),
+      )
+      .mockResolvedValue({ rows: [] });
+    const heartbeat = startReplicaHeartbeat(
+      { query } as unknown as Db,
+      fakeRegistry(connections),
+      1_000,
+    );
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(query).toHaveBeenCalledTimes(1);
+    connections[0]!.synced = true;
+    finish();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[0]![1][2]).toEqual([false]);
+    expect(query.mock.calls[1]![1][2]).toEqual([true]);
+    heartbeat.stop();
+  });
+
+  it('logs a failed batch and allows the next tick to retry', async () => {
+    vi.useFakeTimers();
+    const query = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('database unavailable'))
+      .mockResolvedValue({ rows: [] });
+    const log = vi.fn();
+    const heartbeat = startReplicaHeartbeat(
+      { query } as unknown as Db,
+      fakeRegistry([entry('s1', 'doc-1', 'replica-a', true)]),
+      1_000,
+      log,
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(log).toHaveBeenCalledWith('replica heartbeat failed: database unavailable');
+    heartbeat.stop();
   });
 });

@@ -3,7 +3,12 @@ import { IndexeddbPersistence } from 'y-indexeddb';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { createRoot, getRootId, getChildren, insertItem, type Actor } from '@open-outliner/crdt';
 import { setStorageStatus } from './offline/storage-status.js';
-import { claimTabReplicaId, getOrCreateTabReplicaId, type ReplicaClaimChannel, type ReplicaIdClaim } from './replica-id.js';
+import {
+  claimTabReplicaId,
+  getOrCreateTabReplicaId,
+  type ReplicaClaimChannel,
+  type ReplicaIdClaim,
+} from './replica-id.js';
 import { syncAckPayload } from './sync-ack.js';
 
 /**
@@ -89,7 +94,13 @@ export interface Session {
 export function createSession(documentId: string): Session {
   const doc = new Y.Doc();
   const initialReplicaId = getReplicaId();
-  const actor: Actor = { replicaId: initialReplicaId, now: () => Date.now() };
+  let replicaId = initialReplicaId;
+  const actor: Actor = {
+    get replicaId() {
+      return replicaId;
+    },
+    now: () => Date.now(),
+  };
   // The document's synthetic root uses the document id as its item id, so every
   // replica derives the SAME root id and can never create a second root.
   const rootId = documentId;
@@ -99,10 +110,8 @@ export function createSession(documentId: string): Session {
   const syncUrl = import.meta.env.VITE_SYNC_URL;
   // The replica id the sync connection identifies as. Starts as the tab's id
   // and is replaced (with the connection) at most once, if this tab loses the
-  // duplicate-tab duel below. The actor's HLC stamps keep the id they were
-  // minted with: the id is metadata (Yjs's per-instance client id remains the
-  // concurrent-write arbiter), so stamps under the pre-duel id stay valid.
-  let replicaId = initialReplicaId;
+  // duplicate-tab duel below. The actor reads the current id for future HLC
+  // stamps; already-authored stamps retain their original identity.
   let provider: HocuspocusProvider | undefined;
 
   // Hocuspocus requires a non-empty `token` whenever the server defines
@@ -152,15 +161,11 @@ export function createSession(documentId: string): Session {
   // original tab keeps its id; the shared row is left to expire via the
   // stale-replica TTL (the safe direction — it keeps blocking GC).
   const claim: ReplicaIdClaim | undefined = syncUrl
-    ? claimTabReplicaId(
-        claimChannel(documentId),
-        undefined,
-        (freshId) => {
-          replicaId = freshId;
-          provider?.destroy();
-          provider = makeProvider(freshId, syncUrl);
-        },
-      )
+    ? claimTabReplicaId(claimChannel(documentId), undefined, (freshId) => {
+        replicaId = freshId;
+        provider?.destroy();
+        provider = makeProvider(freshId, syncUrl);
+      })
     : undefined;
 
   const session: Session = {
