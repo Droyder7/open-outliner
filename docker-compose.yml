@@ -21,7 +21,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.app
-      secrets: [proxy_ca]
     environment:
       DATABASE_URL: postgres://outliner:${POSTGRES_PASSWORD:-outliner}@postgres:5432/outliner
       PORT: '8787'
@@ -54,7 +53,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
-      secrets: [proxy_ca]
     ports:
       - '${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:80'
     depends_on:
@@ -63,9 +61,3 @@ services:
 
 volumes:
   pgdata:
-
-secrets:
-  # Build-time only. Normal Linux hosts use their public CA bundle; managed
-  # environments may supply their proxy CA. Never copied into either image.
-  proxy_ca:
-    file: ${CODEX_PROXY_CERT:-/etc/ssl/certs/ca-certificates.crt}

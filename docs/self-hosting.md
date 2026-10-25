@@ -33,11 +33,21 @@ Images are pinned to digests in Compose/Dockerfiles. PostgreSQL uses version 17.
 installation available, export using its server, and restore into a separate 17
 volume before switching. The application migrations do not upgrade PostgreSQL.
 
-Builds behind a managed proxy use Docker's configured proxy defaults. Set
-`CODEX_PROXY_CERT` to its CA file if required; the BuildKit secret is mounted only
-in dependency-install steps, never copied into runtime images. Normal Linux
-hosts default to their public system CA bundle. TLS verification stays enabled.
-The application image runs as the unprivileged Node user with production deps.
+Builds behind a managed proxy use Docker's configured proxy defaults. Public
+builds use Node's normal trust roots and need no external certificate file.
+For a managed proxy CA, set `CODEX_PROXY_CERT` to its PEM file and use the opt-in
+overlay:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.proxy.yml build app web
+```
+
+Newer Compose/Bake versions may require adding
+`--allow fs.read="$CODEX_PROXY_CERT"` to that build command to authorize reading
+that specific file outside the checkout. Older Compose versions do not have this
+flag. The BuildKit secret is mounted only during dependency installation, never
+copied into runtime images. TLS verification stays enabled. The application
+image runs as the unprivileged Node user with production dependencies.
 
 ## Optional attachments
 

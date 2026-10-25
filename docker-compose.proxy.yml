@@ -1,0 +1,12 @@
+# Optional build-time CA for managed HTTPS proxies. Never part of public builds.
+# docker compose -f docker-compose.yml -f docker-compose.proxy.yml build app web
+services:
+  app:
+    build:
+      secrets: [proxy_ca]
+  web:
+    build:
+      secrets: [proxy_ca]
+secrets:
+  proxy_ca:
+    file: ${CODEX_PROXY_CERT:?Set CODEX_PROXY_CERT to the proxy CA PEM file}
