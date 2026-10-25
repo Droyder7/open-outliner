@@ -8,8 +8,8 @@ fractional ranks. Times run from dispatched input/command to the next animation
 frame, including the command's synchronous model/DOM work. Tests assert no page
 errors and at most 32 rendered tree rows. The nesting fixture has 1,000 levels.
 
-Latest complete performance run: typing p95 14.9ms, keyboard navigation 14.8ms,
-move 63.4ms, zoom 13.5ms. Budgets remain 50/50/100/100ms respectively. Both tests
+Latest complete performance run: typing p95 15.5ms, keyboard navigation 15.2ms,
+move 43.5ms, zoom 15.5ms. Budgets remain 50/50/100/100ms respectively. Both tests
 pass. The fixture closes the live provider before loading an out-of-band test
 snapshot, avoiding a fixture write racing IndexedDB compaction.
 
@@ -21,3 +21,10 @@ Run: build shared + crdt + client, start the server against a disposable migrate
 PostgreSQL database, then `pnpm test:browser`. Browser binaries are installed with
 `pnpm exec playwright install chromium`. The performance fixtures block service
 workers to isolate rendering; offline tests exercise the actual service worker.
+
+PF-5 adds two workflow journeys: capture with title/notes, note search, trash and
+restore, JSON download/re-import, checkpoint recovery; and revealing a collapsed
+search match while rejecting invalid imports without changing the catalog.
+Recovery always creates another document. Exports include one canonical root;
+a session regression guards schema/root initialization. Pre-versioned development
+caches get a raw checkpoint before conversion, preserving legacy trash.

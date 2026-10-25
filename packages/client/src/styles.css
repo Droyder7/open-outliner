@@ -288,3 +288,39 @@ body {
   color: var(--muted);
   padding: 0 5px;
 }
+
+.document-tools {
+  border-block: 1px solid var(--border);
+  padding: 12px 0;
+  margin: 12px 0;
+}
+.document-tools label {
+  display: block;
+  margin: 6px 0;
+}
+.document-tools input:not([type='file']),
+.document-tools textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.document-tools textarea {
+  min-height: 48px;
+}
+.tool-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.search-result {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px;
+}
+.trash-action {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}

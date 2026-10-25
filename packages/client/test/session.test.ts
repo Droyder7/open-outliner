@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { getChildren, insertItem } from '@open-outliner/crdt';
+import { getChildren, insertItem, itemsMap } from '@open-outliner/crdt';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { createSession, type Session } from '../src/session.js';
 import { REPLICA_ID_KEY } from '../src/replica-id.js';
@@ -31,6 +31,17 @@ describe('session duplicate-tab identity', () => {
     vi.clearAllMocks();
   });
 
+  it('seeds the actual canonical root and metadata for a personal document', async () => {
+    vi.useFakeTimers();
+    session = createSession('22222222-2222-4222-8222-222222222222', {
+      accountId: 'local',
+      realtime: false,
+    });
+    await session.whenReady;
+    expect(session.doc.getMap('meta').get('schemaVersion')).toBe(2);
+    expect(session.doc.getMap('meta').get('rootId')).toBe(session.rootId);
+    expect(itemsMap(session.doc).has(session.rootId)).toBe(true);
+  });
   it('uses the fresh identity for future HLC stamps as well as the sync connection', async () => {
     vi.useFakeTimers();
     vi.stubEnv('VITE_SYNC_URL', 'ws://localhost/collaboration');
@@ -52,6 +63,7 @@ describe('session duplicate-tab identity', () => {
     session = createSession('22222222-2222-4222-8222-222222222222');
     await vi.advanceTimersByTimeAsync(50);
     await session.whenReady;
+    expect(itemsMap(session.doc).has(session.rootId)).toBe(true);
     const seededNodes = getChildren(session.doc, session.rootId);
     expect(seededNodes[0]!.hlc.replicaId).toBe(originalId);
 

@@ -6,6 +6,8 @@ import * as Y from 'yjs';
 import { memo } from 'react';
 import {
   getChildren,
+  itemsMap,
+  insertItem,
   getRecoveredIds,
   visibleRows,
   getContentText,
@@ -47,6 +49,7 @@ export interface OutlinerProps {
   readonly actor: Actor;
   readonly rootId: string;
   readonly presentationKey?: string;
+  readonly revealItem?: string | undefined;
 }
 
 interface PendingFocus {
@@ -59,6 +62,7 @@ function OutlinerView({
   actor,
   rootId,
   presentationKey = rootId,
+  revealItem,
 }: OutlinerProps): JSX.Element {
   const history = useMemo(() => createOutlineHistory(doc), [doc]);
   useEffect(() => () => history.stop(), [history]);
@@ -254,6 +258,22 @@ function OutlinerView({
     [doc, actor, effectiveZoom, isCollapsed, requestFocus],
   );
 
+  useEffect(() => {
+    if (!revealItem || !itemsMap(doc).has(revealItem)) return;
+    setZoomRoot(rootId);
+    setCollapsedIds((old) => {
+      const next = new Set(old);
+      let parent = getParentId(doc, revealItem);
+      const seen = new Set<string>();
+      while (parent && parent !== ROOT_PARENT_SENTINEL && !seen.has(parent)) {
+        seen.add(parent);
+        next.delete(parent);
+        parent = getParentId(doc, parent);
+      }
+      return next;
+    });
+    requestFocus(revealItem, 0);
+  }, [revealItem, doc, rootId, requestFocus]);
   const breadcrumb = buildBreadcrumb(doc, effectiveZoom, rootId);
   const recovery = getRecoveredIds(doc);
   const rows = useMemo(
@@ -281,6 +301,25 @@ function OutlinerView({
       {recovery.size > 0 && (
         <p role="note">Recovered branches are marked below. Move them to organize them.</p>
       )}
+      <button
+        onClick={() => {
+          const id = crypto.randomUUID();
+          doc.transact(
+            () =>
+              insertItem(
+                doc,
+                id,
+                effectiveZoom,
+                getChildren(doc, effectiveZoom).slice(-1)[0]?.id,
+                actor,
+              ),
+            'structure',
+          );
+          requestFocus(id, 0);
+        }}
+      >
+        Add item
+      </button>
       <div
         className="outline-scroll"
         ref={viewport}
@@ -305,6 +344,7 @@ function OutlinerView({
               onKeyDown={handleKeyDown}
               onToggleCollapse={toggleCollapse}
               onZoom={setZoomRoot}
+              onTrash={(cid) => doc.transact(() => deleteItem(doc, cid, actor), 'structure')}
             />
           ))}
         </ul>
@@ -327,6 +367,7 @@ interface RowProps {
   onKeyDown(id: string, e: React.KeyboardEvent<HTMLDivElement>): void;
   onToggleCollapse(id: string): void;
   onZoom(id: string): void;
+  onTrash(id: string): void;
 }
 
 const Row = memo(function Row({
@@ -340,6 +381,7 @@ const Row = memo(function Row({
   onKeyDown,
   onToggleCollapse,
   onZoom,
+  onTrash,
 }: RowProps): JSX.Element {
   const text = getContentYText(doc, id);
   const children = getChildren(doc, id);
@@ -384,6 +426,9 @@ const Row = memo(function Row({
         ) : (
           <span className="row-text" />
         )}
+        <button className="trash-action" aria-label="Move to trash" onClick={() => onTrash(id)}>
+          ×
+        </button>
       </div>
     </li>
   );

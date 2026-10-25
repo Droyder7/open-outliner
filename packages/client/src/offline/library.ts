@@ -20,7 +20,25 @@ export interface Account {
   id: string;
   workspaceId?: string;
 }
+export interface Checkpoint {
+  id: string;
+  accountId: string;
+  documentId: string;
+  title: string;
+  bytes: Uint8Array;
+  createdAt: number;
+  reason: string;
+}
+export interface SearchEntry {
+  id: string;
+  accountId: string;
+  documentId: string;
+  itemId: string;
+  text: string;
+}
 class Library extends Dexie {
+  checkpoints!: Table<Checkpoint, string>;
+  search!: Table<SearchEntry, string>;
   documents!: Table<LocalDocument, string>;
   pending!: Table<PendingUpdate, string>;
   constructor() {
@@ -28,6 +46,12 @@ class Library extends Dexie {
     this.version(1).stores({
       documents: 'id,accountId,modifiedAt',
       pending: 'id,[accountId+documentId],createdAt',
+    });
+    this.version(2).stores({
+      documents: 'id,accountId,modifiedAt',
+      pending: 'id,[accountId+documentId],createdAt',
+      checkpoints: 'id,[accountId+documentId],createdAt',
+      search: 'id,accountId,documentId',
     });
   }
 }

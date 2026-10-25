@@ -31,6 +31,8 @@ one, add a new ADR that supersedes it and update the Status line here.
 | [0023](./0023-offline-library-and-receipts.md) | Local catalog and committed update receipts | Accepted |
 | [0024](./0024-personal-tree-semantics.md) | Schema v2 tree, deletion and undo | Accepted |
 
+| [0025](./0025-personal-workflow-recovery.md) | Local retrieval and portable recovery | Accepted |
+
 ## Template
 
 ```markdown

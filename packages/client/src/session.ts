@@ -1,7 +1,7 @@
 import * as Y from 'yjs';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import { HocuspocusProvider } from '@hocuspocus/provider';
-import { createRoot, getRootId, getChildren, insertItem, type Actor } from '@open-outliner/crdt';
+import { createRoot, getChildren, insertItem, itemsMap, type Actor } from '@open-outliner/crdt';
 import { setStorageStatus } from './offline/storage-status.js';
 import {
   claimTabReplicaId,
@@ -206,10 +206,36 @@ export function createSession(documentId: string, options: SessionOptions = {}):
       provider ? waitForInitialSync(() => provider) : Promise.resolve(),
     ]).then(async () => {
       await options.beforeSeed?.(doc);
+      if (options.accountId) {
+        const meta = doc.getMap('meta');
+        const version = meta.get('schemaVersion');
+        if (version !== undefined && version !== 2)
+          throw new Error('Upgrade required: incompatible local document');
+        doc.transact(() => {
+          // Preserve trash from pre-versioned development caches before enabling v2.
+          for (const [id, node] of itemsMap(doc)) {
+            const legacy = node.get('deleted');
+            if (
+              version === undefined &&
+              legacy instanceof Y.Map &&
+              legacy.get('isDeleted') === true
+            ) {
+              let deletes = node.get('deleteRecords') as Y.Map<unknown> | undefined;
+              if (!deletes) {
+                deletes = new Y.Map();
+                node.set('deleteRecords', deletes);
+              }
+              deletes.set(`legacy:${id}`, true);
+            }
+          }
+          meta.set('schemaVersion', 2);
+          meta.set('rootId', rootId);
+        }, 'initialization');
+      }
       // Seed a root + first empty bullet once local AND (if configured) server
       // state has loaded, so a brand-new document is immediately typeable
       // without racing an existing server-seeded root (see waitForInitialSync).
-      if (!getRootId(doc)) createRoot(doc, rootId, actor);
+      if (!itemsMap(doc).has(rootId)) createRoot(doc, rootId, actor);
       if (getChildren(doc, rootId).length === 0) {
         insertItem(doc, crypto.randomUUID(), rootId, undefined, actor);
       }

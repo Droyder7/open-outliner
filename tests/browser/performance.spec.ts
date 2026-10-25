@@ -13,7 +13,7 @@ test.use({ serviceWorkers: 'block' });
 
 async function populate(page: import('@playwright/test').Page, count: number, deep = false) {
   await page.goto('/');
-  await expect(page.getByRole('textbox').first()).toBeVisible();
+  await expect(page.getByRole('tree').getByRole('textbox').first()).toBeVisible();
   await expect(page.getByRole('status')).toContainText('Saved locally');
   const id = await page.getByLabel('Open document').inputValue();
   const prior = await page.evaluate(
@@ -110,7 +110,7 @@ async function populate(page: import('@playwright/test').Page, count: number, de
     { id, bytes },
   );
   await page.goto('/');
-  await expect(page.getByRole('textbox').first()).toHaveText('Item 0');
+  await expect(page.getByRole('tree').getByRole('textbox').first()).toHaveText('Item 0');
   return id;
 }
 async function measure(page: import('@playwright/test').Page, key: string, ctrl = false) {
@@ -134,7 +134,7 @@ test('10k outline meets browser interaction budgets with bounded DOM', async ({ 
   page.on('pageerror', (error) => errors.push(error.message));
   await populate(page, 10000);
   expect(await page.getByRole('treeitem').count()).toBeLessThanOrEqual(32);
-  const row = page.getByRole('textbox').first();
+  const row = page.getByRole('tree').getByRole('textbox').first();
   await row.focus();
   const typing: number[] = [];
   const navigation: number[] = [];

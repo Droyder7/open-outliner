@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 test('local capture survives a cold offline reload', async ({ page, context }) => {
   await page.goto('/');
-  await page.getByRole('textbox').first().fill('A thought to keep offline');
+  await page.getByRole('tree').getByRole('textbox').first().fill('A thought to keep offline');
   await expect(page.getByRole('status')).toContainText('Saved locally');
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
@@ -9,11 +9,15 @@ test('local capture survives a cold offline reload', async ({ page, context }) =
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
   await context.setOffline(true);
   await page.reload();
-  await expect(page.getByRole('textbox').first()).toHaveText('A thought to keep offline');
-  await page.getByRole('textbox').first().fill('Developed without a network');
+  await expect(page.getByRole('tree').getByRole('textbox').first()).toHaveText(
+    'A thought to keep offline',
+  );
+  await page.getByRole('tree').getByRole('textbox').first().fill('Developed without a network');
   await expect(page.getByRole('status')).toContainText('Saved locally');
   await page.reload();
-  await expect(page.getByRole('textbox').first()).toHaveText('Developed without a network');
+  await expect(page.getByRole('tree').getByRole('textbox').first()).toHaveText(
+    'Developed without a network',
+  );
 });
 
 test('cached account opens offline while server authentication is unavailable', async ({
@@ -31,7 +35,7 @@ test('cached account opens offline while server authentication is unavailable', 
     ),
   );
   await page.reload();
-  await page.getByRole('textbox').first().fill('Cached account thought');
+  await page.getByRole('tree').getByRole('textbox').first().fill('Cached account thought');
   await expect(page.getByRole('status')).toContainText(/Pending sync|Reconnect|Sync error/);
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
@@ -39,7 +43,9 @@ test('cached account opens offline while server authentication is unavailable', 
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
   await context.setOffline(true);
   await page.reload();
-  await expect(page.getByRole('textbox').first()).toHaveText('Cached account thought');
+  await expect(page.getByRole('tree').getByRole('textbox').first()).toHaveText(
+    'Cached account thought',
+  );
 });
 
 test('quota failure never becomes a successful save claim', async ({ page }) => {
@@ -51,7 +57,7 @@ test('quota failure never becomes a successful save claim', async ({ page }) => 
     };
   });
   await page.goto('/');
-  await page.getByRole('textbox').first().fill('Work with failed persistence');
+  await page.getByRole('tree').getByRole('textbox').first().fill('Work with failed persistence');
   await expect(page.getByRole('status')).toContainText('Storage error');
 });
 
@@ -72,14 +78,18 @@ test('offline account updates survive reload and get a committed receipt on reco
   });
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
   await context.setOffline(true);
-  await page.getByRole('textbox').first().fill('Durable offline edit');
+  await page.getByRole('tree').getByRole('textbox').first().fill('Durable offline edit');
   await expect(page.getByRole('status')).toContainText('Pending sync');
   await page.reload();
-  await expect(page.getByRole('textbox').first()).toHaveText('Durable offline edit');
+  await expect(page.getByRole('tree').getByRole('textbox').first()).toHaveText(
+    'Durable offline edit',
+  );
   await context.setOffline(false);
   await expect(page.getByRole('status')).toContainText('Saved on server', { timeout: 15000 });
   await page.reload();
-  await expect(page.getByRole('textbox').first()).toHaveText('Durable offline edit');
+  await expect(page.getByRole('tree').getByRole('textbox').first()).toHaveText(
+    'Durable offline edit',
+  );
 });
 
 test('a different authenticated account never receives cached pending work', async ({ page }) => {
@@ -98,36 +108,44 @@ test('a different authenticated account never receives cached pending work', asy
     localStorage.setItem('oo:personal-account', JSON.stringify({ id: 'cached-account' })),
   );
   await page.reload();
-  await page.getByRole('textbox').first().fill('Do not send to another account');
+  await page.getByRole('tree').getByRole('textbox').first().fill('Do not send to another account');
   await expect(page.getByRole('status')).toContainText('Reconnect to sync');
   expect(uploads).toBe(0);
 });
 
 test('structural undo and redo keep the original text recoverable', async ({ page }) => {
   await page.goto('/');
-  const row = page.getByRole('textbox').first();
+  const row = page.getByRole('tree').getByRole('textbox').first();
   await row.fill('A recoverable idea');
   await row.press('End');
   await row.press('Enter');
-  await expect(page.getByRole('textbox')).toHaveCount(2);
+  await expect(page.getByRole('tree').getByRole('textbox')).toHaveCount(2);
   await page.keyboard.press('Control+z');
-  await expect(page.getByRole('textbox')).toHaveCount(1);
-  await expect(page.getByRole('textbox').first()).toHaveText('A recoverable idea');
+  await expect(page.getByRole('tree').getByRole('textbox')).toHaveCount(1);
+  await expect(page.getByRole('tree').getByRole('textbox').first()).toHaveText(
+    'A recoverable idea',
+  );
   await page.keyboard.press('Control+Shift+z');
-  await expect(page.getByRole('textbox')).toHaveCount(2);
+  await expect(page.getByRole('tree').getByRole('textbox')).toHaveCount(2);
 });
 
 test('two offline tabs keep their local document in sync', async ({ page, context }) => {
   await page.goto('/');
-  await page.getByRole('textbox').first().fill('From the first tab');
+  await page.getByRole('tree').getByRole('textbox').first().fill('From the first tab');
   await expect(page.getByRole('status')).toContainText('Saved locally');
   const second = await context.newPage();
   await second.goto('/');
-  await expect(second.getByRole('textbox').first()).toHaveText('From the first tab');
-  await second.getByRole('textbox').first().fill('From the second tab');
-  await expect(page.getByRole('textbox').first()).toHaveText('From the second tab');
+  await expect(second.getByRole('tree').getByRole('textbox').first()).toHaveText(
+    'From the first tab',
+  );
+  await second.getByRole('tree').getByRole('textbox').first().fill('From the second tab');
+  await expect(page.getByRole('tree').getByRole('textbox').first()).toHaveText(
+    'From the second tab',
+  );
   await expect(second.getByRole('status')).toContainText('Saved locally');
   await second.close();
   await page.reload();
-  await expect(page.getByRole('textbox').first()).toHaveText('From the second tab');
+  await expect(page.getByRole('tree').getByRole('textbox').first()).toHaveText(
+    'From the second tab',
+  );
 });

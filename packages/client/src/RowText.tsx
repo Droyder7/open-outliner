@@ -19,7 +19,7 @@ export interface RowTextProps {
 }
 
 /** Apply `next` to `ytext` as a single delete+insert over the changed middle. */
-function applyTextEdit(ytext: Y.Text, next: string): void {
+export function applyTextEdit(ytext: Y.Text, next: string): void {
   const prev = ytext.toString();
   if (prev === next) return;
 
@@ -43,7 +43,13 @@ function applyTextEdit(ytext: Y.Text, next: string): void {
   else mutate();
 }
 
-export function RowText({ id, text, placeholder, registerEl, onKeyDown }: RowTextProps): JSX.Element {
+export function RowText({
+  id,
+  text,
+  placeholder,
+  registerEl,
+  onKeyDown,
+}: RowTextProps): JSX.Element {
   const ref = useRef<HTMLDivElement | null>(null);
 
   const setRef = useCallback(

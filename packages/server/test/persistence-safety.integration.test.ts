@@ -39,6 +39,22 @@ describeDb('personal-first persistence safety', () => {
     await store.storeUpdate(id, Y.encodeStateAsUpdate(doc));
     return { id, doc, store };
   }
+  it('projects a Yjs document title into the library without touching another document', async () => {
+    const a = await fixture();
+    const b = await fixture();
+    a.doc.getMap('meta').set('title', 'Personal knowledge');
+    await a.store.storeUpdate(a.id, Y.encodeStateAsUpdate(a.doc));
+    const projector = createProjector({ db, store: a.store, replicaId: 'server' });
+    await projector.projectDocument(a.id);
+    expect((await db.query('SELECT title FROM documents WHERE id=$1', [a.id])).rows[0]!.title).toBe(
+      'Personal knowledge',
+    );
+    expect((await db.query('SELECT title FROM documents WHERE id=$1', [b.id])).rows[0]!.title).toBe(
+      'Doc',
+    );
+    a.doc.destroy();
+    b.doc.destroy();
+  });
   function add(doc: Y.Doc, root: string) {
     const id = randomUUID();
     writeMove(doc, id, {

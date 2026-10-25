@@ -2,6 +2,13 @@ import { trackItemChanges } from './change-tracking.js';
 import * as Y from 'yjs';
 import { itemsMap, readNodeSnapshot, writeMove, writeDeleted, writeField } from './yjs-node.js';
 import type { ItemNodeSnapshot } from '@open-outliner/shared';
+const activeHistories = new WeakMap<Y.Doc, { undo(): void; redo(): void }>();
+export function undoDocument(doc: Y.Doc, redo = false) {
+  const history = activeHistories.get(doc);
+  if (redo) history?.redo();
+  else history?.undo();
+}
+
 type Change = { id: string; before?: ItemNodeSnapshot; after?: ItemNodeSnapshot };
 type Action = { kind: 'text' } | { kind: 'structure'; changes: Change[]; textSteps: number };
 /** Local undo emits new structural intentions; it never rewinds a document snapshot. */
@@ -118,7 +125,7 @@ export function createOutlineHistory(doc: Y.Doc) {
       replaying = false;
     }
   }
-  return {
+  const api = {
     undo() {
       const a = undo.pop();
       if (a) {
@@ -136,8 +143,11 @@ export function createOutlineHistory(doc: Y.Doc) {
     stop() {
       doc.off('beforeTransaction', begin);
       doc.off('afterTransaction', end);
+      activeHistories.delete(doc);
       untrack();
       manager.destroy();
     },
   };
+  activeHistories.set(doc, api);
+  return api;
 }

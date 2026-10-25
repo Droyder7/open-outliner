@@ -162,6 +162,9 @@ export function createProjector(deps: ProjectorDeps): Projector {
           );
         }
 
+        const title = doc.getMap('meta').get('title');
+        if (typeof title === 'string')
+          await tx.query('UPDATE documents SET title=$2 WHERE id=$1', [documentId, title]);
         // Advance projected_rev in the SAME transaction as the upserts.
         await tx.query(
           `UPDATE document_projection SET projected_rev = $2, updated_at = now()

@@ -1,3 +1,7 @@
+import { checkpoint } from './offline/recovery.js';
+import { itemsMap } from '@open-outliner/crdt';
+import { DocumentTools, LibrarySearch } from './DocumentTools.js';
+import { liveQuery } from 'dexie';
 import { exportPreviousLibrary } from './offline/legacy-export.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createSession, type Session } from './session.js';
@@ -31,6 +35,7 @@ export function App(): JSX.Element {
   const [account, setAccount] = useState<Account>(rememberedAccount);
   const [documents, setDocuments] = useState<LocalDocument[]>([]);
   const [current, setCurrent] = useState<string>();
+  const [reveal, setReveal] = useState<string>();
   const [login, setLogin] = useState(false);
   const [error, setError] = useState('');
   const [legacy, setLegacy] = useState(false);
@@ -83,6 +88,27 @@ export function App(): JSX.Element {
       alive = false;
     };
   }, [account, load]);
+  useEffect(() => {
+    const subscription = liveQuery(() =>
+      library.documents
+        .where('accountId')
+        .equals(account.id)
+        .filter((d) => d.schemaVersion === 2)
+        .reverse()
+        .sortBy('modifiedAt'),
+    ).subscribe({
+      next: (docs) => {
+        if (docs.length) setDocuments(docs);
+      },
+    });
+    return () => subscription.unsubscribe();
+  }, [account]);
+  const created = useCallback(
+    (id: string) => {
+      void load().then(() => setCurrent(id));
+    },
+    [load],
+  );
   const signIn = useCallback((next: Account) => {
     setCurrent(undefined);
     setDocuments([]);
@@ -133,6 +159,13 @@ export function App(): JSX.Element {
         </p>
       )}
       {error && <p role="alert">{error}</p>}
+      <LibrarySearch
+        account={account}
+        onReveal={(documentId, itemId) => {
+          setReveal(itemId);
+          setCurrent(documentId);
+        }}
+      />
       <nav aria-label="Documents">
         <select
           aria-label="Open document"
@@ -158,11 +191,29 @@ export function App(): JSX.Element {
           New document
         </button>
       </nav>
-      {current && <Document key={`${account.id}:${current}`} id={current} account={account} />}
+      {current && (
+        <Document
+          key={`${account.id}:${current}`}
+          id={current}
+          account={account}
+          onCreated={created}
+          reveal={reveal}
+        />
+      )}
     </main>
   );
 }
-function Document({ id, account }: { id: string; account: Account }) {
+function Document({
+  id,
+  account,
+  onCreated,
+  reveal,
+}: {
+  id: string;
+  account: Account;
+  onCreated: (id: string) => void;
+  reveal: string | undefined;
+}) {
   const [session, setSession] = useState<Session>();
   const [ready, setReady] = useState(false);
   const [save, setSave] = useState<SaveState>('Saved locally');
@@ -174,6 +225,8 @@ function Document({ id, account }: { id: string; account: Account }) {
       realtime: false,
       beforeSeed: async () => {
         await sync?.restore();
+        if (itemsMap(s.doc).size && s.doc.getMap('meta').get('schemaVersion') !== 2)
+          await checkpoint(s.doc, account.id, id, 'Before schema upgrade');
       },
     });
     const sync = synchronizeDocument(s.doc, id, account, (state) => {
@@ -203,11 +256,15 @@ function Document({ id, account }: { id: string; account: Account }) {
           ? ' · Stored on this device; export for backup'
           : ''}
       </p>
+      {ready && session && (
+        <DocumentTools doc={session.doc} id={id} account={account} onCreated={onCreated} />
+      )}
       {ready && session ? (
         <Outliner
           doc={session.doc}
           actor={session.actor}
           rootId={session.rootId}
+          revealItem={reveal}
           presentationKey={`${account.id}:${id}`}
         />
       ) : (

@@ -148,6 +148,7 @@ export function writeMove(doc: Y.Doc, id: string, move: MoveRegister): void {
       let node = items.get(id);
       if (!node) {
         node = new Y.Map<unknown>();
+        node.set(NODE_KEY.content, new Y.Text());
         items.set(id, node);
       }
       const moveMap = new Y.Map<unknown>();
