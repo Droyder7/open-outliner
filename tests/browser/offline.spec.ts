@@ -149,3 +149,58 @@ test('two offline tabs keep their local document in sync', async ({ page, contex
     'From the second tab',
   );
 });
+
+test('two separate device profiles merge offline edits after reconnect', async ({
+  page,
+  context,
+  browser,
+}) => {
+  test.setTimeout(60000);
+  const email = `devices-${Date.now()}@offline.test`;
+  const password = 'hunter2hunter2';
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.getByRole('button', { name: "Don't have an account? Sign up" }).click();
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign up', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Log out', exact: true })).toBeVisible();
+  await page.getByLabel('Document title').fill('Shared personal outline');
+  await page.getByRole('tree').getByRole('textbox').first().fill('Common thought');
+  await expect(page.getByRole('status')).toContainText('Saved on server');
+  const documentId = await page.getByLabel('Open document').inputValue();
+  const other = await browser.newContext();
+  try {
+    const second = await other.newPage();
+    await second.goto('/');
+    await second.getByRole('button', { name: 'Sign in', exact: true }).click();
+    await second.getByLabel('Email').fill(email);
+    await second.getByLabel('Password').fill(password);
+    await second.getByRole('button', { name: 'Log in', exact: true }).click();
+    await expect(
+      second.getByLabel('Open document').locator(`option[value="${documentId}"]`),
+    ).toHaveCount(1);
+    await second.getByLabel('Open document').selectOption(documentId);
+    const a = page.getByRole('tree').getByRole('textbox').filter({ hasText: 'Common thought' });
+    const b = second.getByRole('tree').getByRole('textbox').filter({ hasText: 'Common thought' });
+    await expect(b).toHaveCount(1, { timeout: 15000 });
+    await expect(second.getByRole('status')).toContainText('Saved on server');
+    await context.setOffline(true);
+    await other.setOffline(true);
+    await a.press('End');
+    await page.keyboard.insertText(' from laptop');
+    await b.press('End');
+    await second.keyboard.insertText(' from phone');
+    await expect(page.getByRole('status')).toContainText('Pending sync');
+    await expect(second.getByRole('status')).toContainText('Pending sync');
+    await context.setOffline(false);
+    await other.setOffline(false);
+    await expect(a).toContainText('from laptop', { timeout: 15000 });
+    await expect(a).toContainText('from phone', { timeout: 15000 });
+    await expect(b).toHaveText(await a.innerText(), { timeout: 15000 });
+    await expect(page.getByRole('status')).toContainText('Saved on server');
+    await expect(second.getByRole('status')).toContainText('Saved on server');
+  } finally {
+    await other.close();
+  }
+});

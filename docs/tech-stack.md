@@ -43,7 +43,9 @@ minimizes integration friction across the editor, transport, and offline layers 
   depends on byte-wise lexicographic ordering. → [05-fractional-indexing](./fractional-indexing.md)
 - **Next.js is optional** and only for marketing/auth pages needing SSR; the app itself is
   a Vite SPA/PWA.
-- **MinIO** is the recommended S3 for self-hosters so the blob plane has no cloud dependency.
+- **Object storage is optional** in the personal-first deployment. Use an operated
+  S3-compatible service only when attachment APIs are needed; no MinIO image is
+  bundled or required. See [self-hosting](self-hosting.md).
 
 ## Deferred / reassess-later
 

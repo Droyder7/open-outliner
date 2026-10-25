@@ -73,6 +73,8 @@ function defaultMigrationsDir(): string {
 export function loadConfig(): ServerConfig {
   const corsOrigin = process.env.CORS_ORIGIN || undefined;
   const s3Endpoint = process.env.S3_ENDPOINT || undefined;
+  if (s3Endpoint && (!process.env.S3_ACCESS_KEY_ID || !process.env.S3_SECRET_ACCESS_KEY))
+    throw new Error('S3_ENDPOINT requires S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY');
   return {
     databaseUrl: env('DATABASE_URL', 'postgres://outliner:outliner@localhost:5432/outliner'),
     port: intEnv('PORT', 8787),

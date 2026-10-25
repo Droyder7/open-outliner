@@ -47,15 +47,17 @@ software.
 
 ## The one-paragraph version
 
-Open-Outliner is a **React/Vite PWA** whose canonical client state is a **Yjs CRDT
-document** persisted locally in **IndexedDB** and synced in real time over WebSockets via
-**Hocuspocus**. The **Yjs document is the source of truth for structure and text**; a
-server-side **materializer** projects it into a **PostgreSQL** relational model
-(`items` adjacency list + fractional-index ordering, with an optional closure table) that
-serves search, views, and the API. Deletes are **soft** (tombstones) so offline replicas
-converge; physical deletion is confined to a tombstone-aware GC job. This split —
-**CRDT decides, Postgres records and validates** — is the load-bearing idea of the whole
-system.
+Open-Outliner is a personal-first **React/Vite PWA**. Cached outlines open from
+**IndexedDB** without network authentication. **Yjs** owns title, structure, text,
+notes and completion; background personal-device synchronization sends durable
+batches to Node over same-origin HTTP and acknowledges committed PostgreSQL
+receipts. A shared effective-tree view keeps invalid placements recoverable.
+PostgreSQL retains raw updates and projects them for server reads. The existing
+Hocuspocus adapter remains available, while team-feature expansion is deferred.
+Trash and local checkpoints are retained; portable JSON/Markdown and whole-server
+backup/restore support recovery. The default self-host needs web, app and
+PostgreSQL; S3 attachments are optional. See ADR-0021–0026 and the personal-first
+plan for current behavior where the older topic specifications differ.
 
 ## Conventions
 

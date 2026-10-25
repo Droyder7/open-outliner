@@ -1,8 +1,10 @@
 # Multi-stage Dockerfile for the Vite React PWA static bundle.
-# The client reads VITE_SYNC_URL and VITE_API_BASE_URL at build time.
+# Personal sync uses same-origin /rpc through nginx.
 
-FROM node:22-alpine AS base
-RUN corepack enable && corepack prepare pnpm@11.15.1 --activate
+FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS base
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; fi; \
+    corepack enable && NODE_USE_ENV_PROXY=1 corepack prepare pnpm@11.15.1 --activate
 WORKDIR /app
 
 FROM base AS deps
@@ -10,7 +12,9 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/crdt/package.json packages/crdt/
 COPY packages/client/package.json packages/client/
-RUN pnpm install --frozen-lockfile --prod=false
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; fi; \
+    NODE_USE_ENV_PROXY=1 pnpm install --frozen-lockfile --prod=false
 
 FROM base AS build
 ARG VITE_SYNC_URL
@@ -38,7 +42,7 @@ RUN pnpm --filter @open-outliner/shared build && \
     pnpm --filter @open-outliner/crdt build && \
     pnpm --filter @open-outliner/client build
 
-FROM nginx:stable-alpine AS runtime
+FROM nginx:stable-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951 AS runtime
 COPY --from=build /app/packages/client/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80

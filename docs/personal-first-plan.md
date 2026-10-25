@@ -19,7 +19,9 @@ trash/checkpoints are in scope. Rich text, backlinks, mirrors, boards, team
 sharing expansion, and multi-server operation are deferred. Existing development
 data may be reset only after readable exports are verified; no unidentified or
 production dataset may be reset. No connected user database or browser profile
-was supplied at the baseline, so no data has been reset or purportedly backed up.
+was supplied at the baseline, so no user data was reset or purportedly backed up at that baseline. PF-3 later
+exported the identified disposable test database and verified a separate restore
+before its reset (ADR-0024).
 Keep original browser storage until it can be exported explicitly.
 
 Core semantics: atomic native-Yjs placement, deterministic derived recovery of
@@ -30,3 +32,9 @@ receipts acknowledge committed batches; WebSocket connectivity is not durability
 Tests must cover actual browser boot, not just headless stores. Gate status must
 remain Implemented until the documented acceptance workload is verified. Do not
 silently weaken a performance threshold to obtain a passing test.
+
+All milestone acceptance workloads are now verified locally; see
+[status](status.md), [browser evidence](personal-browser-validation.md), and
+[self-host evidence](personal-self-host-validation.md). The CI workflow repeats
+unit/type/lint, PostgreSQL/S3 regressions, browser journeys and clean restore.
+The deferred collaboration and mobile/a11y scope is unchanged.

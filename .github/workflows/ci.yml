@@ -1,22 +1,16 @@
 name: CI
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
-
 env:
-  # pnpm 11 requires Node >= 22.13 (it uses the node:sqlite builtin, absent in Node 20).
-  NODE_VERSION: "22"
-  PNPM_VERSION: "11.15.1"
-
+  NODE_VERSION: '22'
+  PNPM_VERSION: '11.15.1'
 jobs:
-  # ── Lint + typecheck + unit tests (no external services) ──────────────
   checks:
     name: Lint, Typecheck & Unit Tests
     runs-on: ubuntu-latest
@@ -35,30 +29,26 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
 
-  # ── Integration tests (needs Postgres + MinIO) ────────────────────────
   integration:
-    name: Integration Tests
+    name: PostgreSQL, optional S3 & Browser Journeys
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:17-alpine@sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb
         env:
           POSTGRES_USER: outliner
           POSTGRES_PASSWORD: outliner
           POSTGRES_DB: outliner
-        ports:
-          - "5432:5432"
+        ports: ['5432:5432']
         options: >-
           --health-cmd="pg_isready -U outliner -d outliner"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=10
+          --health-interval=5s --health-timeout=5s --health-retries=10
     env:
-      DATABASE_URL: postgres://outliner:outliner@localhost:5432/outliner
-      S3_ENDPOINT: http://localhost:9000
-      S3_ACCESS_KEY_ID: minioadmin
-      S3_SECRET_ACCESS_KEY: minioadmin
+      DATABASE_URL: postgres://outliner:outliner@127.0.0.1:5432/outliner
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_ACCESS_KEY_ID: S3RVER
+      S3_SECRET_ACCESS_KEY: S3RVER
       S3_BUCKET: open-outliner
     steps:
       - uses: actions/checkout@v4
@@ -70,32 +60,34 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Workspace packages are consumed as compiled artifacts (their exports
-      # maps point at dist, which is gitignored), so build them before
-      # migrate/tests on a fresh checkout — otherwise vitest cannot resolve
-      # @open-outliner/{shared,crdt}.
-      - run: pnpm --filter @open-outliner/shared build
-      - run: pnpm --filter @open-outliner/crdt build
+      - run: pnpm --filter @open-outliner/shared build && pnpm --filter @open-outliner/crdt build
       - run: pnpm migrate
-      # MinIO is started as a step, not a service container: the minio/minio
-      # image has CMD ["minio"] (no default `server /data`), so a service
-      # container would print help and exit before the health check can pass.
-      - name: Start MinIO
+      - name: Start pinned S3 test emulator
         run: |
-          docker run -d --name minio \
-            -p 9000:9000 \
-            -e MINIO_ROOT_USER=minioadmin \
-            -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio:latest server /data
-          echo "Waiting for MinIO..."
-          timeout 120 bash -c 'until curl -sf http://localhost:9000/minio/health/live > /dev/null; do sleep 1; done'
+          mkdir -p /tmp/outliner-s3
+          pnpm exec s3rver -d /tmp/outliner-s3 -a 127.0.0.1 -p 9000 --silent --no-vhost-buckets > /tmp/outliner-s3.log 2>&1 &
+          timeout 30 bash -c 'until curl -s http://127.0.0.1:9000 > /dev/null; do sleep 1; done'
       - run: pnpm --filter @open-outliner/server test
+      - run: pnpm --filter @open-outliner/client build
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Browser acceptance checks
+        run: |
+          pnpm --filter @open-outliner/server exec tsx src/main.ts > /tmp/outliner-server.log 2>&1 &
+          timeout 30 bash -c 'until curl -sf http://127.0.0.1:8787/health > /dev/null; do sleep 1; done'
+          pnpm test:browser
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-and-server-diagnostics
+          path: |
+            test-results/
+            /tmp/outliner-server.log
+            /tmp/outliner-s3.log
 
-  # ── Client build (validates Vite production build) ─────────────────────
-  client-build:
-    name: Client Build
+  smoke:
+    name: Pinned Containers, Clean Deployment & Restore Drill
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -105,96 +97,27 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+      - uses: docker/setup-buildx-action@v3
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @open-outliner/shared build
-      - run: pnpm --filter @open-outliner/crdt build
-      - run: pnpm --filter @open-outliner/client build
-
-  # ── Container build (validates Dockerfiles) ────────────────────────────
-  containers:
-    name: Container Build
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Build app image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.app
-          push: false
-          tags: open-outliner/app:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Build web image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.web
-          push: false
-          tags: open-outliner/web:ci
-          build-args: |
-            VITE_SYNC_URL=http://localhost:8788
-            VITE_API_BASE_URL=http://localhost:8787
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ── Full self-host smoke test (compose up → create → edit → health) ───
-  smoke:
-    name: Self-Host Smoke Test
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - name: Build images
+      - run: pnpm --filter @open-outliner/shared build && pnpm --filter @open-outliner/crdt build
+      - run: docker compose build app web
+      - run: docker compose up -d --wait --wait-timeout 120
+      - name: Create, persist, log in again and read through the web proxy
+        run: SMOKE_FIXTURE_FILE=/tmp/restore-fixture.json node packages/server/scripts/self-host-smoke.mjs
+      - name: Backup and isolated restore
         run: |
-          docker compose build app web
-      - name: Start services
-        run: |
-          docker compose up -d
-          echo "Waiting for health..."
-          # curl the host-published port directly: `docker compose exec` without
-          # -T fails in GitHub Actions (no TTY) and would spin until timeout,
-          # and the app's compose healthcheck already covers the in-container
-          # path. This also matches the smoke steps below, which hit
-          # http://localhost:8787 from the runner.
-          if ! timeout 120 bash -c 'until curl -sf http://localhost:8787/health | grep -q ok; do sleep 2; done'; then
-            echo "::error::app did not report /health ok within 120s"
-            docker compose ps
-            echo "--- app logs ---"
-            docker compose logs app
+          scripts/backup.sh /tmp/outliner-backup
+          export RESTORE_DOCUMENT_ID=$(jq -r .documentId /tmp/restore-fixture.json)
+          export RESTORE_EXPECT_TEXT=$(jq -r .marker /tmp/restore-fixture.json)
+          scripts/restore-drill.sh /tmp/outliner-backup outliner_restore_ci
+          if scripts/restore-drill.sh /tmp/outliner-backup outliner_restore_ci; then
+            echo 'Restore must refuse to overwrite an existing database' >&2
             exit 1
           fi
-      - name: Smoke - create document via API
-        run: |
-          # Signup
-          SIGNUP=$(curl -s -c /tmp/cookies.txt -b /tmp/cookies.txt -X POST http://localhost:8787/rpc \
-            -H 'Content-Type: application/json' \
-            -d '{"method":"Signup","params":{"email":"smoke@test.com","password":"password123"},"requestId":"smoke-1"}')
-          echo "Signup: $SIGNUP"
-          CSRF=$(echo "$SIGNUP" | jq -r '.result.csrfToken')
-          # Signup auto-creates a personal workspace; resolve its real id via
-          # WhoAmI instead of guessing (CreateDocument requires membership).
-          WHOAMI=$(curl -s -c /tmp/cookies.txt -b /tmp/cookies.txt -X POST http://localhost:8787/rpc \
-            -H 'Content-Type: application/json' \
-            -H "X-CSRF-Token: $CSRF" \
-            -d '{"method":"WhoAmI","params":{},"requestId":"smoke-2"}')
-          WORKSPACE_ID=$(echo "$WHOAMI" | jq -r '.result.workspaceIds[0]')
-          echo "WhoAmI: $WHOAMI"
-          # Create document
-          CREATE=$(curl -s -c /tmp/cookies.txt -b /tmp/cookies.txt -X POST http://localhost:8787/rpc \
-            -H 'Content-Type: application/json' \
-            -H "X-CSRF-Token: $CSRF" \
-            -d "{\"method\":\"CreateDocument\",\"params\":{\"workspaceId\":\"$WORKSPACE_ID\",\"title\":\"Smoke Test\"},\"requestId\":\"smoke-3\"}")
-          echo "CreateDocument: $CREATE"
-          echo "$CREATE" | jq -e '.result.documentId' > /dev/null
-      - name: Smoke - health endpoint
-        run: |
-          HEALTH=$(curl -s http://localhost:8787/health)
-          echo "Health: $HEALTH"
-          echo "$HEALTH" | jq -e '.status == "ok"'
+          curl -sf http://127.0.0.1:8080/health
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color
       - name: Teardown
         if: always()
         run: docker compose down -v

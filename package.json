@@ -27,6 +27,7 @@
     "concurrently": "^10.0.3",
     "eslint": "^8.57.1",
     "prettier": "^3.4.2",
+    "s3rver": "3.7.1",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },

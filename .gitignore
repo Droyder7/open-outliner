@@ -12,3 +12,6 @@ refs
 
 test-results/
 playwright-report/
+
+backups/
+*.dump
