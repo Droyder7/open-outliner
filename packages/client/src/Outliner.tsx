@@ -1,3 +1,4 @@
+import { Icon } from './Icon.js';
 import { useEffect } from 'react';
 import { useMemo } from 'react';
 import { createOutlineHistory } from '@open-outliner/crdt';
@@ -301,27 +302,9 @@ function OutlinerView({
       {recovery.size > 0 && (
         <p role="note">Recovered branches are marked below. Move them to organize them.</p>
       )}
-      <button
-        onClick={() => {
-          const id = crypto.randomUUID();
-          doc.transact(
-            () =>
-              insertItem(
-                doc,
-                id,
-                effectiveZoom,
-                getChildren(doc, effectiveZoom).slice(-1)[0]?.id,
-                actor,
-              ),
-            'structure',
-          );
-          requestFocus(id, 0);
-        }}
-      >
-        Add item
-      </button>
       <div
         className="outline-scroll"
+        style={{ height: Math.min(Math.max(rows.length * 36, 72), 480) }}
         ref={viewport}
         onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
       >
@@ -349,6 +332,26 @@ function OutlinerView({
           ))}
         </ul>
       </div>
+      <button
+        className="add-item-button"
+        onClick={() => {
+          const id = crypto.randomUUID();
+          doc.transact(
+            () =>
+              insertItem(
+                doc,
+                id,
+                effectiveZoom,
+                getChildren(doc, effectiveZoom).slice(-1)[0]?.id,
+                actor,
+              ),
+            'structure',
+          );
+          requestFocus(id, 0);
+        }}
+      >
+        <Icon name="plus" size={15} /> Add item
+      </button>
     </div>
   );
 }
@@ -409,7 +412,7 @@ const Row = memo(function Row({
           aria-label={expandable ? (collapsed ? 'Expand' : 'Collapse') : undefined}
           tabIndex={-1}
         >
-          {expandable ? '▸' : ''}
+          {expandable ? <Icon name="chevron" size={12} /> : ''}
         </button>
         <button className="bullet" onClick={() => onZoom(id)} aria-label="Zoom in" tabIndex={-1}>
           •
@@ -427,7 +430,7 @@ const Row = memo(function Row({
           <span className="row-text" />
         )}
         <button className="trash-action" aria-label="Move to trash" onClick={() => onTrash(id)}>
-          ×
+          <Icon name="trash" size={14} />
         </button>
       </div>
     </li>

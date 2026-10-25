@@ -34,3 +34,12 @@ into the same account, opens the synced document, and edits the same text offlin
 alongside the first profile. Reconnecting both retains both insertions and yields
 the same text and committed status. This exercises the real HTTP receipt/pull
 path across independent IndexedDB databases, in addition to the tab channel.
+
+## Minimal interface refresh — 2026-10-25
+
+All 13 Chromium cases pass after the sidebar/editor redesign. The added phone
+journey covers library navigation, new-document capture, Cmd/Ctrl-K search,
+contextual notes and closing the sign-in dialog. The existing offline, recovery,
+two-device and large-outline workloads run against the new UI. Latest p95:
+14.5ms typing, 25.7ms navigation, 61.8ms moves, 14.5ms zoom. The budgets and
+32-mounted-row bound are unchanged. See [UI validation](personal-ui-validation.md).

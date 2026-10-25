@@ -1,3 +1,4 @@
+import { Icon } from './Icon.js';
 import { checkpoint } from './offline/recovery.js';
 import { itemsMap } from '@open-outliner/crdt';
 import { DocumentTools, LibrarySearch } from './DocumentTools.js';
@@ -39,6 +40,12 @@ export function App(): JSX.Element {
   const [login, setLogin] = useState(false);
   const [error, setError] = useState('');
   const [legacy, setLegacy] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const signInDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (login) signInDialog.current?.showModal();
+    else signInDialog.current?.close();
+  }, [login]);
   const load = useCallback(async () => {
     const docs = await library.documents
       .where('accountId')
@@ -124,83 +131,172 @@ export function App(): JSX.Element {
     }
   }
   return (
-    <main className="app">
-      <header className="app-header">
-        <h1>Open-Outliner</h1>
-        <span>{account.id === 'local' ? 'On this device' : 'Personal library'}</span>
-        {account.id === 'local' ? (
-          <button onClick={() => setLogin(!login)}>Sign in</button>
-        ) : (
-          <>
-            <button onClick={() => setLogin(!login)}>Reconnect</button>
-            <button onClick={() => void signOut()}>Log out</button>
-          </>
-        )}
-      </header>
-      {login && (
-        <section>
-          <button onClick={() => setLogin(false)}>Close sign in</button>
-          <AuthGate>{(user) => <SignedIn user={user} done={signIn} />}</AuthGate>
-        </section>
-      )}
-      <StorageBanner />
-      {legacy && (
-        <p>
-          Older local documents are preserved.{' '}
-          <button
-            onClick={() =>
-              void exportPreviousLibrary(account.id).catch(() =>
-                setError('Could not export the previous library'),
-              )
-            }
-          >
-            Export previous library
-          </button>
-        </p>
-      )}
-      {error && <p role="alert">{error}</p>}
-      <LibrarySearch
-        account={account}
-        onReveal={(documentId, itemId) => {
-          setReveal(itemId);
-          setCurrent(documentId);
-        }}
-      />
-      <nav aria-label="Documents">
-        <select
-          aria-label="Open document"
-          value={current ?? ''}
-          onChange={(e) => setCurrent(e.target.value)}
-        >
-          {documents.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.title}
-            </option>
-          ))}
-        </select>
+    <div className="app-shell" data-sidebar-open={sidebarOpen}>
+      <button
+        className="mobile-library-toggle icon-button"
+        aria-label="Open library"
+        aria-expanded={sidebarOpen}
+        onClick={() => setSidebarOpen(true)}
+      >
+        <Icon name="panel" />
+      </button>
+      {sidebarOpen && (
         <button
-          onClick={() =>
-            void newLocalDocument(account)
-              .then(async (d) => {
-                await load();
-                setCurrent(d.id);
-              })
-              .catch(() => setError('Could not save a new document'))
-          }
-        >
-          New document
-        </button>
-      </nav>
-      {current && (
-        <Document
-          key={`${account.id}:${current}`}
-          id={current}
-          account={account}
-          onCreated={created}
-          reveal={reveal}
+          className="sidebar-scrim"
+          aria-label="Close library"
+          onClick={() => setSidebarOpen(false)}
         />
       )}
-    </main>
+      <aside className="sidebar" aria-label="Your library">
+        <div className="brand">
+          <span className="brand-mark">
+            <Icon name="outline" size={21} />
+          </span>
+          <h1>Open-Outliner</h1>
+          <button
+            className="mobile-sidebar-close icon-button"
+            aria-label="Close library"
+            onClick={() => setSidebarOpen(false)}
+          >
+            <Icon name="close" />
+          </button>
+        </div>
+        <LibrarySearch
+          onOpen={() => setSidebarOpen(true)}
+          account={account}
+          onReveal={(documentId, itemId) => {
+            setReveal(itemId);
+            setCurrent(documentId);
+            setSidebarOpen(false);
+          }}
+        />
+        <nav className="library-nav" aria-label="Documents">
+          <div className="nav-section-heading">
+            <span>YOUR OUTLINES</span>
+            <button
+              className="icon-button"
+              aria-label="New document"
+              title="New document"
+              onClick={() =>
+                void newLocalDocument(account)
+                  .then(async (d) => {
+                    await load();
+                    setCurrent(d.id);
+                    setSidebarOpen(false);
+                  })
+                  .catch(() => setError('Could not save a new document'))
+              }
+            >
+              <Icon name="plus" size={17} />
+            </button>
+          </div>
+          <div className="document-list">
+            {documents.map((d) => (
+              <button
+                key={d.id}
+                className="document-link"
+                aria-label={`Open ${d.title || 'Untitled'}`}
+                aria-current={current === d.id ? 'page' : undefined}
+                data-document-id={d.id}
+                onClick={() => {
+                  setCurrent(d.id);
+                  setReveal(undefined);
+                  setSidebarOpen(false);
+                }}
+              >
+                <Icon name="file" size={17} />
+                <span>{d.title || 'Untitled'}</span>
+              </button>
+            ))}
+          </div>
+        </nav>
+        <div className="sidebar-footer">
+          <div className="workspace-identity">
+            <span className="workspace-avatar">
+              <Icon name={account.id === 'local' ? 'device' : 'outline'} size={18} />
+            </span>
+            <div>
+              <strong>{account.id === 'local' ? 'Local workspace' : 'Personal library'}</strong>
+              <span>{account.id === 'local' ? 'On this device' : 'Connected to your account'}</span>
+            </div>
+          </div>
+          {account.id === 'local' ? (
+            <button className="signin-button" onClick={() => setLogin(true)}>
+              Sign in <Icon name="arrow" size={16} />
+            </button>
+          ) : (
+            <div className="account-actions">
+              <button onClick={() => setLogin(true)}>Reconnect</button>
+              <button onClick={() => void signOut()}>Log out</button>
+            </div>
+          )}
+          <p className="sidebar-footnote">
+            {account.id === 'local'
+              ? 'Export your outlines to keep a backup.'
+              : 'Your edits sync when connected.'}
+          </p>
+        </div>
+      </aside>
+      <main className="main-workspace">
+        <div className="workspace-notices">
+          <StorageBanner />
+          {legacy && (
+            <p className="notice">
+              Older local documents are preserved.{' '}
+              <button
+                onClick={() =>
+                  void exportPreviousLibrary(account.id).catch(() =>
+                    setError('Could not export the previous library'),
+                  )
+                }
+              >
+                Export previous library
+              </button>
+            </p>
+          )}
+          {error && (
+            <p className="notice error" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+        {current && (
+          <Document
+            key={`${account.id}:${current}`}
+            id={current}
+            account={account}
+            onCreated={created}
+            reveal={reveal}
+          />
+        )}
+      </main>
+      <dialog
+        ref={signInDialog}
+        className="signin-dialog"
+        aria-label="Sign in to your library"
+        onCancel={(event) => {
+          event.preventDefault();
+          setLogin(false);
+        }}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) setLogin(false);
+        }}
+      >
+        <div className="dialog-content">
+          <button
+            className="dialog-close icon-button"
+            aria-label="Close sign in"
+            onClick={() => setLogin(false)}
+          >
+            <Icon name="close" />
+          </button>
+          <div className="dialog-brand">
+            <Icon name="outline" size={25} />
+          </div>
+          {login && <AuthGate>{(user) => <SignedIn user={user} done={signIn} />}</AuthGate>}
+        </div>
+      </dialog>
+    </div>
   );
 }
 function Document({
@@ -249,27 +345,42 @@ function Document({
     };
   }, [id, account]);
   return (
-    <section>
-      <p role="status">
-        {save}
-        {save === 'Saved locally' && account.id === 'local'
-          ? ' · Stored on this device; export for backup'
-          : ''}
-      </p>
-      {ready && session && (
-        <DocumentTools doc={session.doc} id={id} account={account} onCreated={onCreated} />
-      )}
-      {ready && session ? (
-        <Outliner
-          doc={session.doc}
-          actor={session.actor}
-          rootId={session.rootId}
-          revealItem={reveal}
-          presentationKey={`${account.id}:${id}`}
-        />
-      ) : (
-        <p>Opening local document…</p>
-      )}
+    <section className="document-workspace">
+      <header className="workspace-topbar">
+        <div className="workspace-breadcrumb">
+          <Icon name="outline" size={16} />
+          <span>My workspace</span>
+          <span className="breadcrumb-divider">/</span>
+          <strong>Outline</strong>
+        </div>
+        <p
+          className={`save-status ${save.includes('error') ? 'save-error' : ''}`}
+          role="status"
+          title={
+            account.id === 'local'
+              ? 'Stored on this device. Export your outlines for a backup.'
+              : 'Changes sync when you are connected.'
+          }
+        >
+          <span className="status-dot" />
+          {save}
+        </p>
+      </header>
+      <div className="document-canvas">
+        {ready && session ? (
+          <DocumentTools doc={session.doc} id={id} account={account} onCreated={onCreated}>
+            <Outliner
+              doc={session.doc}
+              actor={session.actor}
+              rootId={session.rootId}
+              revealItem={reveal}
+              presentationKey={`${account.id}:${id}`}
+            />
+          </DocumentTools>
+        ) : (
+          <p className="loading">Opening your outline…</p>
+        )}
+      </div>
     </section>
   );
 }

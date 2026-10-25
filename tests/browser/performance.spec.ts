@@ -15,7 +15,9 @@ async function populate(page: import('@playwright/test').Page, count: number, de
   await page.goto('/');
   await expect(page.getByRole('tree').getByRole('textbox').first()).toBeVisible();
   await expect(page.getByRole('status')).toContainText('Saved locally');
-  const id = await page.getByLabel('Open document').inputValue();
+  const id = (await page
+    .locator('[data-document-id][aria-current="page"]')
+    .getAttribute('data-document-id'))!;
   const prior = await page.evaluate(
     async (id) =>
       new Promise<number[][]>((resolve, reject) => {

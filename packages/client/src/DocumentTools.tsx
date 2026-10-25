@@ -1,5 +1,7 @@
+import { flushSync } from 'react-dom';
+import { Icon } from './Icon.js';
 import { applyTextEdit } from './RowText.js';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import * as Y from 'yjs';
 import { liveQuery } from 'dexie';
 import { itemsMap, readAllSnapshots, undeleteItem, undoDocument } from '@open-outliner/crdt';
@@ -12,11 +14,13 @@ export function DocumentTools({
   id,
   account,
   onCreated,
+  children,
 }: {
   doc: Y.Doc;
   id: string;
   account: Account;
   onCreated: (id: string) => void;
+  children: ReactNode;
 }) {
   const [title, setTitle] = useState(String(doc.getMap('meta').get('title') ?? 'Untitled'));
   const [error, setError] = useState('');
@@ -24,6 +28,18 @@ export function DocumentTools({
   const [note, setNote] = useState('');
   const [trash, setTrash] = useState<{ id: string; text: string }[]>([]);
   const [history, setHistory] = useState<Checkpoint[]>([]);
+  const [panel, setPanel] = useState<'notes' | 'history' | 'options'>();
+  const panelTrigger = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && panel) {
+        setPanel(undefined);
+        panelTrigger.current?.focus();
+      }
+    };
+    document.addEventListener('keydown', close);
+    return () => document.removeEventListener('keydown', close);
+  }, [panel]);
   useEffect(() => {
     const focus = (event: FocusEvent) => {
       const row = (event.target as HTMLElement)?.closest('[data-item-id]');
@@ -122,127 +138,288 @@ export function DocumentTools({
     onCreated(await importDocument(data, account));
   }
   return (
-    <section className="document-tools" aria-label="Document tools">
-      <label>
-        Document title{' '}
+    <>
+      <div className="document-heading">
+        <span className="document-kicker">PERSONAL OUTLINE</span>
         <input
+          className="document-title"
+          aria-label="Document title"
           value={title}
+          placeholder="Untitled"
+          spellCheck={false}
           onChange={(event) => {
             setTitle(event.target.value);
             doc.getMap('meta').set('title', event.target.value);
           }}
         />
-      </label>
-      {selected && (
-        <label>
-          Item note{' '}
-          <textarea
-            value={note}
-            onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
-                event.preventDefault();
-                undoDocument(doc, event.shiftKey);
-              }
-            }}
-            onChange={(event) => {
-              const node = itemsMap(doc).get(selected);
-              if (!node) return;
-              let text = node.get('note');
-              if (!(text instanceof Y.Text)) {
-                text = new Y.Text();
-                node.set('note', text);
-              }
-              applyTextEdit(text as Y.Text, event.target.value);
-              setNote(event.target.value);
-            }}
-          />
-        </label>
-      )}
-      <div className="tool-actions">
-        <button
-          onClick={() =>
-            download(
-              'outline.json',
-              JSON.stringify(portableDocument(doc), null, 2),
-              'application/json',
-            )
-          }
-        >
-          Export JSON
-        </button>
-        <button
-          onClick={() => download('outline.md', markdown(portableDocument(doc)), 'text/markdown')}
-        >
-          Export Markdown
-        </button>
-        <label>
-          Import JSON{' '}
-          <input
-            aria-label="Import JSON"
-            type="file"
-            accept="application/json,.json"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void importFile(file).catch((err) => setError(String(err)));
-              event.target.value = '';
-            }}
-          />
-        </label>
-        <button
-          onClick={() =>
-            void checkpoint(doc, account.id, id, 'Manual checkpoint').catch(() =>
-              setError('Could not save checkpoint'),
-            )
-          }
-        >
-          Save checkpoint
-        </button>
       </div>
-      <details>
-        <summary>Trash ({trash.length})</summary>
-        {trash.map((item) => (
-          <p key={item.id}>
-            {item.text}{' '}
+      <div className="document-toolbar" role="group" aria-label="Document tools">
+        <span className="current-view">
+          <Icon name="outline" size={16} />
+          Outline
+        </span>
+        <div className="toolbar-actions">
+          {(
+            [
+              { key: 'notes', label: 'Notes', icon: 'note' },
+              { key: 'history', label: 'History', icon: 'history' },
+              { key: 'options', label: 'More', icon: 'more' },
+            ] as const
+          ).map((item) => (
             <button
-              aria-label={`Restore ${item.text}`}
-              onClick={() =>
-                undeleteItem(doc, item.id, { replicaId: 'restore', now: () => Date.now() })
-              }
+              key={item.key}
+              className={`toolbar-button ${panel === item.key ? 'active' : ''}`}
+              aria-label={item.key === 'options' ? 'Document options' : item.label}
+              aria-expanded={panel === item.key}
+              aria-controls={`document-panel-${id}`}
+              onClick={(event) => {
+                panelTrigger.current = event.currentTarget;
+                setPanel(panel === item.key ? undefined : item.key);
+              }}
             >
-              Restore
+              <Icon name={item.icon} size={16} />
+              <span>{item.label}</span>
             </button>
-          </p>
-        ))}
-      </details>
-      <details>
-        <summary>Recovery history ({history.length})</summary>
-        {history.map((saved) => (
-          <p key={saved.id}>
-            {new Date(saved.createdAt).toLocaleString()} · {saved.reason}{' '}
-            <button
-              onClick={() =>
-                void recoverCheckpoint(saved.id, account)
-                  .then(onCreated)
-                  .catch((err) => setError(String(err)))
-              }
-            >
-              Recover as new document
-            </button>
-          </p>
-        ))}
-      </details>
-      {error && <p role="alert">{error}</p>}
-    </section>
+          ))}
+        </div>
+      </div>
+      <div className={`editor-layout ${panel ? 'with-inspector' : ''}`}>
+        <div className="editor-surface">{children}</div>
+        {panel && (
+          <aside
+            className="inspector"
+            id={`document-panel-${id}`}
+            aria-label={
+              panel === 'notes'
+                ? 'Notes panel'
+                : panel === 'history'
+                  ? 'Recovery history'
+                  : 'Document options'
+            }
+          >
+            <div className="inspector-heading">
+              <h2>
+                {panel === 'notes'
+                  ? 'Notes'
+                  : panel === 'history'
+                    ? 'Recovery history'
+                    : 'Document options'}
+              </h2>
+              <button
+                className="icon-button"
+                aria-label="Close panel"
+                onClick={() => {
+                  setPanel(undefined);
+                  panelTrigger.current?.focus();
+                }}
+              >
+                <Icon name="close" size={16} />
+              </button>
+            </div>
+            {panel === 'notes' &&
+              (selected ? (
+                <>
+                  <p className="selected-item-label">
+                    {String(itemsMap(doc).get(selected)?.get('content') ?? '') || 'Untitled item'}
+                  </p>
+                  <label className="sr-only" htmlFor={`item-note-${id}`}>
+                    Item note
+                  </label>
+                  <textarea
+                    id={`item-note-${id}`}
+                    className="item-note"
+                    value={note}
+                    placeholder="Add a little context…"
+                    onKeyDown={(event) => {
+                      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+                        event.preventDefault();
+                        undoDocument(doc, event.shiftKey);
+                      }
+                    }}
+                    onChange={(event) => {
+                      const node = itemsMap(doc).get(selected);
+                      if (!node) return;
+                      let text = node.get('note');
+                      if (!(text instanceof Y.Text)) {
+                        text = new Y.Text();
+                        node.set('note', text);
+                      }
+                      applyTextEdit(text as Y.Text, event.target.value);
+                      setNote(event.target.value);
+                    }}
+                  />
+                  <p className="panel-hint">Notes stay with this item.</p>
+                </>
+              ) : (
+                <p className="empty-panel">Select an outline item to add notes.</p>
+              ))}
+            {panel === 'history' && (
+              <>
+                <p className="panel-description">
+                  Return to an earlier version without replacing your current work.
+                </p>
+                <button
+                  className="panel-primary"
+                  onClick={() =>
+                    void checkpoint(doc, account.id, id, 'Manual checkpoint').catch(() =>
+                      setError('Could not save checkpoint'),
+                    )
+                  }
+                >
+                  <Icon name="bookmark" size={15} />
+                  Save checkpoint
+                </button>
+                <p className="panel-hint">
+                  Saved on this device. Automatic checkpoints every five minutes while editing.
+                </p>
+                <div className="history-list">
+                  {history.length === 0 && (
+                    <p className="empty-panel">Your saved checkpoints will appear here.</p>
+                  )}
+                  {[...history].reverse().map((saved) => (
+                    <div className="history-entry" key={saved.id}>
+                      <Icon name="history" size={15} />
+                      <div>
+                        <strong>
+                          {new Date(saved.createdAt).toLocaleString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: 'numeric',
+                            minute: '2-digit',
+                          })}
+                        </strong>
+                        <span>{saved.reason}</span>
+                        <button
+                          className="text-button"
+                          onClick={() =>
+                            void recoverCheckpoint(saved.id, account)
+                              .then(onCreated)
+                              .catch((err) => setError(String(err)))
+                          }
+                        >
+                          Recover as new document
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            {panel === 'options' && (
+              <>
+                <span className="panel-section-label">TAKE YOUR IDEAS WITH YOU</span>
+                <button
+                  className="panel-action"
+                  onClick={() =>
+                    download(
+                      'outline.json',
+                      JSON.stringify(portableDocument(doc), null, 2),
+                      'application/json',
+                    )
+                  }
+                >
+                  <Icon name="download" size={16} />
+                  Export JSON
+                </button>
+                <button
+                  className="panel-action"
+                  onClick={() =>
+                    download('outline.md', markdown(portableDocument(doc)), 'text/markdown')
+                  }
+                >
+                  <Icon name="download" size={16} />
+                  Export Markdown
+                </button>
+                <label className="panel-action import-action">
+                  <Icon name="upload" size={16} />
+                  Import JSON
+                  <input
+                    aria-label="Import JSON"
+                    type="file"
+                    accept="application/json,.json"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) void importFile(file).catch((err) => setError(String(err)));
+                      event.target.value = '';
+                    }}
+                  />
+                </label>
+                <p className="panel-hint">
+                  JSON keeps your structure and notes. Imports open as a new outline.
+                </p>
+                <details className="trash-panel">
+                  <summary>
+                    <Icon name="trash" size={16} />
+                    Trash ({trash.length})<Icon name="chevron" size={13} />
+                  </summary>
+                  {trash.length === 0 && <p className="empty-panel">Nothing in the trash.</p>}
+                  {trash.map((item) => (
+                    <div className="trash-entry" key={item.id}>
+                      <span>{item.text}</span>
+                      <button
+                        className="text-button"
+                        aria-label={`Restore ${item.text}`}
+                        onClick={() =>
+                          undeleteItem(doc, item.id, {
+                            replicaId: 'restore',
+                            now: () => Date.now(),
+                          })
+                        }
+                      >
+                        Restore
+                      </button>
+                    </div>
+                  ))}
+                </details>
+              </>
+            )}
+          </aside>
+        )}
+      </div>
+      <footer className="editor-footer">
+        <span>
+          <kbd>↵</kbd> New item
+        </span>
+        <span>
+          <kbd>Tab</kbd> Indent
+        </span>
+        <span>
+          <kbd>⇧ Tab</kbd> Outdent
+        </span>
+      </footer>
+      {error && (
+        <p className="notice error" role="alert">
+          {error}
+        </p>
+      )}
+    </>
   );
 }
+
 export function LibrarySearch({
   account,
   onReveal,
+  onOpen,
 }: {
   account: Account;
   onReveal: (documentId: string, itemId?: string) => void;
+  onOpen: () => void;
 }) {
   const [query, setQuery] = useState('');
+  const searchInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const search = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        if (document.querySelector('dialog[open]')) return;
+        // Show the mobile library before moving focus into it.
+        flushSync(onOpen);
+        searchInput.current?.focus();
+      }
+    };
+    document.addEventListener('keydown', search);
+    return () => document.removeEventListener('keydown', search);
+  }, [onOpen]);
   const [results, setResults] = useState<
     { key: string; documentId: string; itemId?: string; text: string }[]
   >([]);
@@ -277,23 +454,38 @@ export function LibrarySearch({
     return () => subscription.unsubscribe();
   }, [account, query]);
   return (
-    <section aria-label="Library search">
-      <label>
-        Search library{' '}
-        <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} />
+    <section className="library-search" aria-label="Library search">
+      <label className="search-field">
+        <Icon name="search" size={16} />
+        <span className="sr-only">Search library</span>
+        <input
+          ref={searchInput}
+          aria-label="Search library"
+          type="search"
+          placeholder="Search your thoughts"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+        <kbd>{navigator.platform.includes('Mac') ? '⌘ K' : 'Ctrl K'}</kbd>
       </label>
-      {results.map((result) => (
-        <button
-          className="search-result"
-          key={result.key}
-          onClick={() => {
-            onReveal(result.documentId, result.itemId);
-            setQuery('');
-          }}
-        >
-          {result.text}
-        </button>
-      ))}
+      {query.trim() && (
+        <div className="search-results">
+          {results.length === 0 && <p className="empty-search">No matching thoughts.</p>}
+          {results.map((result) => (
+            <button
+              className="search-result"
+              key={result.key}
+              onClick={() => {
+                onReveal(result.documentId, result.itemId);
+                setQuery('');
+              }}
+            >
+              <Icon name="file" size={15} />
+              <span>{result.text}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

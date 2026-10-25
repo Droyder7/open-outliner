@@ -168,7 +168,9 @@ test('two separate device profiles merge offline edits after reconnect', async (
   await page.getByLabel('Document title').fill('Shared personal outline');
   await page.getByRole('tree').getByRole('textbox').first().fill('Common thought');
   await expect(page.getByRole('status')).toContainText('Saved on server');
-  const documentId = await page.getByLabel('Open document').inputValue();
+  const documentId = (await page
+    .locator('[data-document-id][aria-current="page"]')
+    .getAttribute('data-document-id'))!;
   const other = await browser.newContext();
   try {
     const second = await other.newPage();
@@ -177,10 +179,8 @@ test('two separate device profiles merge offline edits after reconnect', async (
     await second.getByLabel('Email').fill(email);
     await second.getByLabel('Password').fill(password);
     await second.getByRole('button', { name: 'Log in', exact: true }).click();
-    await expect(
-      second.getByLabel('Open document').locator(`option[value="${documentId}"]`),
-    ).toHaveCount(1);
-    await second.getByLabel('Open document').selectOption(documentId);
+    await expect(second.locator(`[data-document-id="${documentId}"]`)).toHaveCount(1);
+    await second.locator(`[data-document-id="${documentId}"]`).click();
     const a = page.getByRole('tree').getByRole('textbox').filter({ hasText: 'Common thought' });
     const b = second.getByRole('tree').getByRole('textbox').filter({ hasText: 'Common thought' });
     await expect(b).toHaveCount(1, { timeout: 15000 });
